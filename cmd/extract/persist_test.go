@@ -2,18 +2,29 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"oddities/database"
 	"oddities/database/generated"
 	"oddities/db"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+var (
+	persistenceSchemaSequence atomic.Uint64
+	persistenceSchemaPattern  = regexp.MustCompile(`^extract_persistence_[0-9]+_[0-9]+$`)
+)
+
 func TestPersistCandidateInsertsEffectsAndBothLimitationScopes(t *testing.T) {
+	t.Parallel()
 	pool, ctx := provisionPersistence(t)
 	candidate := persistenceCandidate(t)
 
@@ -64,6 +75,7 @@ func TestPersistCandidateInsertsEffectsAndBothLimitationScopes(t *testing.T) {
 }
 
 func TestEnsureEmptyCatalogRejectsNonEmptyCatalog(t *testing.T) {
+	t.Parallel()
 	pool, ctx := provisionPersistence(t)
 	queries := generated.New(pool)
 	if err := EnsureEmptyCatalog(ctx, queries); err != nil {
@@ -81,6 +93,7 @@ func TestEnsureEmptyCatalogRejectsNonEmptyCatalog(t *testing.T) {
 }
 
 func TestPersistCandidateRollsBackWhenLimitationIndexIsInvalid(t *testing.T) {
+	t.Parallel()
 	pool, ctx := provisionPersistence(t)
 	candidate := persistenceCandidate(t)
 	invalidIndex := len(candidate.Effects)
@@ -106,21 +119,82 @@ func TestPersistCandidateRollsBackWhenLimitationIndexIsInvalid(t *testing.T) {
 	}
 }
 
+func TestPersistenceSchemaIdentifierIsUniqueAndSafe(t *testing.T) {
+	t.Parallel()
+	first := newPersistenceSchemaName()
+	second := newPersistenceSchemaName()
+	if first == second {
+		t.Fatalf("schema names match: %q", first)
+	}
+
+	quoted, err := persistenceSchemaIdentifier(first)
+	if err != nil {
+		t.Fatalf("quote generated schema: %v", err)
+	}
+	if want := (pgx.Identifier{first}).Sanitize(); quoted != want {
+		t.Fatalf("quoted schema = %q, want %q", quoted, want)
+	}
+
+	if _, err := persistenceSchemaIdentifier(`test"; drop schema public cascade; --`); err == nil {
+		t.Fatal("unsafe schema identifier was accepted")
+	}
+	if _, err := persistenceSchemaIdentifier("public"); err == nil {
+		t.Fatal("public schema identifier was accepted")
+	}
+}
+
 func provisionPersistence(t *testing.T) (*pgxpool.Pool, context.Context) {
 	t.Helper()
 	ctx := context.Background()
-	pool, err := db.Connect(ctx)
+	config, err := pgxpool.ParseConfig(db.URL())
 	if err != nil {
-		t.Fatalf("connect: %v", err)
+		t.Fatalf("parse database URL: %v", err)
 	}
-	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, "drop schema public cascade; create schema public"); err != nil {
-		t.Fatalf("reset: %v", err)
+	admin, err := pgxpool.NewWithConfig(ctx, config.Copy())
+	if err != nil {
+		t.Fatalf("connect admin pool: %v", err)
 	}
+	t.Cleanup(admin.Close)
+
+	schema := newPersistenceSchemaName()
+	quotedSchema, err := persistenceSchemaIdentifier(schema)
+	if err != nil {
+		t.Fatalf("validate schema name: %v", err)
+	}
+	if _, err := admin.Exec(ctx, "create schema "+quotedSchema); err != nil {
+		t.Fatalf("create test schema: %v", err)
+	}
+
+	testConfig := config.Copy()
+	testConfig.ConnConfig.RuntimeParams["search_path"] = quotedSchema
+	pool, err := pgxpool.NewWithConfig(ctx, testConfig)
+	if err != nil {
+		if _, dropErr := admin.Exec(ctx, "drop schema "+quotedSchema+" cascade"); dropErr != nil {
+			t.Errorf("drop test schema after pool setup failure: %v", dropErr)
+		}
+		t.Fatalf("connect isolated test pool: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Close()
+		if _, err := admin.Exec(ctx, "drop schema "+quotedSchema+" cascade"); err != nil {
+			t.Errorf("drop test schema: %v", err)
+		}
+	})
 	if err := db.Apply(ctx, pool, database.Schema()); err != nil {
 		t.Fatalf("apply schema: %v", err)
 	}
 	return pool, ctx
+}
+
+func newPersistenceSchemaName() string {
+	return fmt.Sprintf("extract_persistence_%d_%d", os.Getpid(), persistenceSchemaSequence.Add(1))
+}
+
+func persistenceSchemaIdentifier(schema string) (string, error) {
+	if !persistenceSchemaPattern.MatchString(schema) {
+		return "", fmt.Errorf("unsafe persistence schema name %q", schema)
+	}
+	return (pgx.Identifier{schema}).Sanitize(), nil
 }
 
 func persistenceCandidate(t *testing.T) NormalizedCandidate {
