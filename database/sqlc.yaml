@@ -6,7 +6,10 @@ sql:
     # each new schema/*.sql file here as you create it.
     schema:
       - "schema/foundation.sql"
-      # - "schema/item.sql"
+      - "schema/types.sql"
+      - "schema/magic_item.sql"
+      - "schema/effect.sql"
+      - "schema/limitation.sql"
     queries:
       - "query"
     gen:
