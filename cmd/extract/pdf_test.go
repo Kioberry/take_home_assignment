@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -71,7 +72,7 @@ func TestRenderPagesUsesSelectedPageCommandBoundary(t *testing.T) {
 			t.Fatalf("command = %q, want pdftoppm", name)
 		}
 		page := args[4]
-		path := filepath.Join(args[len(args)-1] + "-" + fmt.Sprintf("%03s", page) + ".png")
+		path := filepath.Join(args[len(args)-1] + "-" + page + ".png")
 		return os.WriteFile(path, []byte("image"), 0644)
 	}}
 
@@ -85,6 +86,11 @@ func TestRenderPagesUsesSelectedPageCommandBoundary(t *testing.T) {
 	if got[0].Number != 3 || got[1].Number != 5 {
 		t.Fatalf("pages = %#v, want page numbers 3, 5", got)
 	}
+	for _, page := range got {
+		if filepath.Base(page.ImagePath) != fmt.Sprintf("page-%03d.png", page.Number) {
+			t.Fatalf("image path = %q, want canonical name", page.ImagePath)
+		}
+	}
 	for _, call := range runner.calls {
 		if !containsArgs(call.args, "-png") || !containsArgs(call.args, "-r", "200") {
 			t.Fatalf("call args = %#v, want -png -r 200", call.args)
@@ -92,6 +98,65 @@ func TestRenderPagesUsesSelectedPageCommandBoundary(t *testing.T) {
 		if !containsArgs(call.args, "-f", call.args[4]) || !containsArgs(call.args, "-l", call.args[4]) {
 			t.Fatalf("call args = %#v, want selected page bounds", call.args)
 		}
+	}
+}
+
+func TestRenderPagesAllPagesNormalizesVariablePaddingAndCleansTempFiles(t *testing.T) {
+	outputDir := t.TempDir()
+	runner := &fakeCommandRunner{run: func(name string, args []string) error {
+		if name != "pdftoppm" {
+			t.Fatalf("command = %q, want pdftoppm", name)
+		}
+		prefix := args[len(args)-1]
+		for _, suffix := range []string{"12", "003", "5"} {
+			if err := os.WriteFile(prefix+"-"+suffix+".png", []byte("image"), 0644); err != nil {
+				return err
+			}
+		}
+		return nil
+	}}
+
+	got, err := RenderPages(context.Background(), runner, "catalog.pdf", outputDir, nil)
+	if err != nil {
+		t.Fatalf("RenderPages: %v", err)
+	}
+	wantNumbers := []int{3, 5, 12}
+	if len(got) != len(wantNumbers) {
+		t.Fatalf("pages = %#v, want %d pages", got, len(wantNumbers))
+	}
+	for i, page := range got {
+		if page.Number != wantNumbers[i] {
+			t.Errorf("page %d number = %d, want %d", i, page.Number, wantNumbers[i])
+		}
+		if filepath.Base(page.ImagePath) != fmt.Sprintf("page-%03d.png", wantNumbers[i]) {
+			t.Errorf("page %d path = %q, want canonical name", i, page.ImagePath)
+		}
+	}
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != len(wantNumbers) {
+		t.Fatalf("output entries = %d, want only canonical images", len(entries))
+	}
+}
+
+func TestRenderPagesCleansTempFilesOnCommandError(t *testing.T) {
+	outputDir := t.TempDir()
+	var prefix string
+	runner := &fakeCommandRunner{run: func(name string, args []string) error {
+		prefix = args[len(args)-1]
+		return errors.New("pdftoppm failed")
+	}}
+
+	if _, err := RenderPages(context.Background(), runner, "catalog.pdf", outputDir, []int{5}); err == nil {
+		t.Fatal("RenderPages succeeded, want command error")
+	}
+	if prefix == "" {
+		t.Fatal("fake runner did not observe render prefix")
+	}
+	if _, err := os.Stat(filepath.Dir(prefix)); !os.IsNotExist(err) {
+		t.Fatalf("temporary render directory stat error = %v, want not exist", err)
 	}
 }
 

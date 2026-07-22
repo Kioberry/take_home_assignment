@@ -66,8 +66,12 @@ func RenderPages(ctx context.Context, runner CommandRunner, pdfPath, outputDir s
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return nil, fmt.Errorf("create render directory %s: %w", outputDir, err)
 	}
-	prefix := filepath.Join(outputDir, "page")
-	expected := make(map[string]bool, len(selected))
+	tempDir, err := os.MkdirTemp(outputDir, ".render-")
+	if err != nil {
+		return nil, fmt.Errorf("create temporary render directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+	prefix := filepath.Join(tempDir, "page")
 	for _, page := range selected {
 		if page < 1 {
 			return nil, fmt.Errorf("render page %d: page number must be positive", page)
@@ -77,10 +81,12 @@ func RenderPages(ctx context.Context, runner CommandRunner, pdfPath, outputDir s
 		if err != nil {
 			return nil, commandError("render page", err, stderr)
 		}
-		path := filepath.Join(outputDir, fmt.Sprintf("page-%03d.png", page))
-		expected[path] = true
-		if _, err := os.Stat(path); err != nil {
-			return nil, fmt.Errorf("render page %d: expected output %s: %w", page, path, err)
+	}
+	if len(selected) == 0 {
+		args := []string{"-png", "-r", "200", pdfPath, prefix}
+		_, stderr, err := runner.Run(ctx, "pdftoppm", args...)
+		if err != nil {
+			return nil, commandError("render pages", err, stderr)
 		}
 	}
 
@@ -88,18 +94,45 @@ func RenderPages(ctx context.Context, runner CommandRunner, pdfPath, outputDir s
 	if err != nil {
 		return nil, fmt.Errorf("find rendered pages: %w", err)
 	}
-	pages := make([]Page, 0, len(paths))
+	counts := make(map[int]int, len(paths))
+	pagePaths := make(map[int]string, len(paths))
 	for _, path := range paths {
-		if len(selected) > 0 && !expected[path] {
-			continue
-		}
 		base := strings.TrimSuffix(filepath.Base(path), ".png")
 		pageText := strings.TrimPrefix(base, "page-")
 		page, parseErr := strconv.Atoi(pageText)
 		if parseErr != nil || page < 1 {
-			continue
+			return nil, fmt.Errorf("invalid rendered page filename %s", path)
 		}
-		pages = append(pages, Page{Number: page, ImagePath: path})
+		counts[page]++
+		pagePaths[page] = path
+	}
+	if len(selected) > 0 {
+		expected := make(map[int]bool, len(selected))
+		for _, page := range selected {
+			expected[page] = true
+		}
+		for page, count := range counts {
+			if !expected[page] {
+				return nil, fmt.Errorf("unexpected rendered page %d", page)
+			}
+			if count != 1 {
+				return nil, fmt.Errorf("rendered page %d appears %d times, want exactly once", page, count)
+			}
+		}
+		for page := range expected {
+			if counts[page] != 1 {
+				return nil, fmt.Errorf("rendered page %d appears %d times, want exactly once", page, counts[page])
+			}
+		}
+	}
+
+	pages := make([]Page, 0, len(pagePaths))
+	for page, path := range pagePaths {
+		canonical := filepath.Join(outputDir, fmt.Sprintf("page-%03d.png", page))
+		if err := os.Rename(path, canonical); err != nil {
+			return nil, fmt.Errorf("rename rendered page %d to %s: %w", page, canonical, err)
+		}
+		pages = append(pages, Page{Number: page, ImagePath: canonical})
 	}
 	sort.Slice(pages, func(i, j int) bool { return pages[i].Number < pages[j].Number })
 	return pages, nil
