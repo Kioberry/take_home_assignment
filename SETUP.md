@@ -28,7 +28,60 @@ go run ./cmd/verify
 
 You should see `postgres is ready`.
 
-## 3. Your work
+## 3. Extraction pipeline
+
+The extractor is AI-driven: local OCR supplies page text, the model identifies
+items and fields, Go normalizes values into the ontology enums, and generated
+sqlc queries write accepted records. Do not put an API key in source files,
+JSON artifacts, or commits.
+
+Additional local prerequisite:
+
+- Poppler (`pdftoppm`) for page rendering — `brew install poppler`
+- Tesseract for OCR — `brew install tesseract`
+
+Configure the provider in the shell:
+
+```bash
+export OPENAI_API_KEY="..."
+export OPENAI_TEXT_MODEL="gpt-5.6-luna"       # optional routine extraction model
+export OPENAI_VISION_MODEL="gpt-5.6-terra"    # optional targeted recovery model
+```
+
+Run modes:
+
+```bash
+go run ./cmd/extract --dry-run                 # extract and write artifacts; no DB calls
+go run ./cmd/extract --dry-run --pages 7-9    # bounded smoke run
+go run ./cmd/extract                           # full extraction and persistence
+go run ./cmd/extract --resume-run RUN_ID       # reuse saved artifacts on a fresh DB
+```
+
+Each run writes `tmp/extraction/RUN_ID/ocr.json`, `raw_candidates.json`,
+`normalized.json`, `review.json`, and `report.json`. Image recovery is targeted
+to invalid or incomplete candidates; routine records use text extraction only.
+The command retries transient provider responses within bounded limits and
+records actual API attempts and semantic recovery counts in the report.
+
+The catalog has no durable source-record identity yet. Therefore a non-empty
+database is rejected, and `--resume-run` does not resume database writes into a
+partially populated catalog. Reset only a dedicated local assignment database
+before a full persistence run:
+
+```bash
+docker compose down -v && docker compose up -d
+go run ./cmd/verify
+go run ./cmd/extract --resume-run RUN_ID
+```
+
+The full-run quality gate expects 39 pages and 80 accounted records, including
+the cross-page records Exo-Armor (7–9), Ring of Elven Lords (22–24), War Drum
+of the Horde (29–31), and Amulet of Encasement (38–39). A partial `--pages`
+run intentionally skips the global 39/80 check. Candidates that remain
+structurally incomplete after image and reconciliation recovery are reported
+as failures and are not inserted.
+
+## 4. Your work
 
 - **`database/schema/*.sql`** — define your ontology here, on top of the provided
   `foundation.sql`. List each new file in `database/sqlc.yaml` (in dependency
@@ -39,8 +92,7 @@ You should see `postgres is ready`.
   cd database && sqlc generate
   ```
   Output lands in `database/generated/`.
-- **`cmd/extract`** — your extraction pipeline. It already provisions the schema
-  and opens the PDF; you build the extraction and inserts.
+- **`cmd/extract`** — the extraction pipeline and CLI.
 - **`stormland/`** — a complete worked example in a different domain (commercial
   real-estate leases). Read it as your reference for the whole loop, then delete
   it if you like. Its live end-to-end test runs against the compose database:
