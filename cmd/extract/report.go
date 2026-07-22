@@ -8,6 +8,7 @@ import (
 
 type RunFailure struct {
 	CandidateName string            `json:"candidate_name,omitempty"`
+	CandidateKey  string            `json:"candidate_key,omitempty"`
 	Stage         string            `json:"stage"`
 	Error         string            `json:"error"`
 	Issues        []ValidationIssue `json:"issues,omitempty"`
@@ -31,6 +32,8 @@ type RunReport struct {
 	ImageCalls              int               `json:"image_calls"`
 	ReconciliationCalls     int               `json:"reconciliation_calls"`
 	APICalls                int               `json:"api_calls"`
+	LogicalRequests         int               `json:"logical_requests"`
+	RetryCount              int               `json:"retry_count"`
 	Failures                []RunFailure      `json:"failures,omitempty"`
 	CompletenessIssues      []ValidationIssue `json:"completeness_issues,omitempty"`
 }
@@ -57,6 +60,8 @@ func newRunReport(cfg Config, pages []Page, result ExtractionResult) RunReport {
 		ImageCalls:              result.ImageCalls,
 		ReconciliationCalls:     result.ReconciliationCalls,
 		APICalls:                result.APICalls,
+		LogicalRequests:         result.LogicalRequests,
+		RetryCount:              retryCount(result.APICalls, result.LogicalRequests),
 		Failures:                failuresFromExtraction(result.Failed),
 		CompletenessIssues:      append([]ValidationIssue(nil), result.CompletenessIssues...),
 	}
@@ -67,11 +72,19 @@ func failuresFromExtraction(failures []ExtractionFailure) []RunFailure {
 	for _, failure := range failures {
 		result = append(result, RunFailure{
 			CandidateName: failure.Candidate.Name,
+			CandidateKey:  CandidateKey(failure.Candidate),
 			Stage:         failure.Stage,
 			Issues:        append([]ValidationIssue(nil), failure.Issues...),
 		})
 	}
 	return result
+}
+
+func retryCount(apiCalls, logicalRequests int) int {
+	if apiCalls <= logicalRequests {
+		return 0
+	}
+	return apiCalls - logicalRequests
 }
 
 // redactExtractionResult ensures configuration secrets cannot cross an
@@ -224,34 +237,42 @@ func loadResumeArtifacts(store *ArtifactStore, cfg *Config) ([]Page, []OCRPage, 
 	} else if !samePages(cfg.SelectedPages, previous.SelectedPages) {
 		return nil, nil, ExtractionResult{}, fmt.Errorf("resume selected pages %#v do not match artifact selected pages %#v", cfg.SelectedPages, previous.SelectedPages)
 	}
-	if len(raw) != previous.CandidateCount {
+	if previous.CandidateCount != len(raw) {
 		return nil, nil, ExtractionResult{}, fmt.Errorf("resume raw candidates count %d does not match report count %d", len(raw), previous.CandidateCount)
 	}
-	if len(normalized) != previous.NormalizedCount {
+	if previous.NormalizedCount != len(normalized) {
 		return nil, nil, ExtractionResult{}, fmt.Errorf("resume normalized candidates count %d does not match report count %d", len(normalized), previous.NormalizedCount)
 	}
-	if len(raw) != len(normalized)+len(review.Failures) {
-		return nil, nil, ExtractionResult{}, fmt.Errorf("resume raw candidates are incompatible with normalized and failed artifacts")
+	if previous.ReviewCount != len(review.Candidates) {
+		return nil, nil, ExtractionResult{}, fmt.Errorf("resume review candidates count %d does not match report count %d", len(review.Candidates), previous.ReviewCount)
+	}
+	if previous.FailureCount != len(previous.Failures) {
+		return nil, nil, ExtractionResult{}, fmt.Errorf("resume report failures count %d does not match report count %d", len(previous.Failures), previous.FailureCount)
+	}
+	if err := validateResumeCandidateGraph(raw, normalized, review, previous); err != nil {
+		return nil, nil, ExtractionResult{}, err
 	}
 	result := ExtractionResult{
 		Accepted:            make([]NormalizedCandidate, 0, len(normalized)),
 		Review:              make([]NormalizedCandidate, 0, len(review.Candidates)),
 		Failed:              append([]ExtractionFailure(nil), review.Failures...),
+		LogicalRequests:     previous.LogicalRequests,
 		TextCalls:           previous.TextCalls,
 		ImageCalls:          previous.ImageCalls,
 		ReconciliationCalls: previous.ReconciliationCalls,
 		APICalls:            previous.APICalls,
 		CompletenessIssues:  append([]ValidationIssue(nil), previous.CompletenessIssues...),
 	}
+	reviewKeys := make(map[string]struct{}, len(review.Candidates))
+	for _, candidate := range review.Candidates {
+		reviewKeys[CandidateKey(candidate.Raw)] = struct{}{}
+	}
 	for _, candidate := range normalized {
-		if candidate.NeedsReview {
+		if _, needsReview := reviewKeys[CandidateKey(candidate.Raw)]; needsReview {
 			result.Review = append(result.Review, candidate)
 		} else {
 			result.Accepted = append(result.Accepted, candidate)
 		}
-	}
-	if len(review.Candidates) > 0 {
-		result.Review = append([]NormalizedCandidate(nil), review.Candidates...)
 	}
 	pages := make([]Page, 0, len(ocr))
 	for _, page := range ocr {
@@ -261,6 +282,158 @@ func loadResumeArtifacts(store *ArtifactStore, cfg *Config) ([]Page, []OCRPage, 
 		return nil, nil, ExtractionResult{}, fmt.Errorf("resume OCR has %d pages, report requires %d", len(pages), previous.PageCount)
 	}
 	return pages, ocr, result, nil
+}
+
+func validateResumeCandidateGraph(raw []RawCandidate, normalized []NormalizedCandidate, review ReviewArtifact, report RunReport) error {
+	rawKeys, err := rawCandidateKeys(raw, "raw candidates")
+	if err != nil {
+		return err
+	}
+	normalizedKeys, err := normalizedCandidateKeys(normalized, "normalized candidates")
+	if err != nil {
+		return err
+	}
+	reviewKeys, err := normalizedCandidateKeys(review.Candidates, "review candidates")
+	if err != nil {
+		return err
+	}
+	failureKeys, err := extractionFailureKeys(review.Failures)
+	if err != nil {
+		return err
+	}
+	normalizedKeySet := make(map[string]struct{}, len(normalizedKeys))
+	for key := range normalizedKeys {
+		normalizedKeySet[key] = struct{}{}
+	}
+	if err := requireKeySetSubset(normalizedKeySet, rawKeys, "normalized", "raw"); err != nil {
+		return err
+	}
+	if err := requireKeySetMatches(rawKeys, unionKeySets(normalizedKeySet, failureKeys), "raw", "normalized and extraction failure"); err != nil {
+		return err
+	}
+	for key := range reviewKeys {
+		if _, ok := normalizedKeys[key]; !ok {
+			return fmt.Errorf("resume review candidate %q is not represented in normalized candidates", key)
+		}
+	}
+	for key, candidate := range normalizedKeys {
+		_, listedForReview := reviewKeys[key]
+		if candidate.NeedsReview != listedForReview {
+			return fmt.Errorf("resume review candidate %q has inconsistent NeedsReview state", key)
+		}
+	}
+	for _, failure := range review.Failures {
+		key := CandidateKey(failure.Candidate)
+		if _, ok := rawKeys[key]; !ok {
+			return fmt.Errorf("resume extraction failure candidate %q is not represented in raw candidates", key)
+		}
+	}
+	for _, failure := range report.Failures {
+		if failure.CandidateKey == "" {
+			if isDatabaseLifecycleStage(failure.Stage) {
+				continue
+			}
+			return fmt.Errorf("resume report failure at stage %q is missing candidate identity", failure.Stage)
+		}
+		if _, ok := rawKeys[failure.CandidateKey]; !ok {
+			return fmt.Errorf("resume report failure candidate %q is not represented in raw candidates", failure.CandidateKey)
+		}
+	}
+	reportedExtractionStages := make(map[string]string, len(report.Failures))
+	for _, failure := range report.Failures {
+		if failure.CandidateKey != "" && !isDatabaseLifecycleStage(failure.Stage) && failure.Stage != "persistence" {
+			reportedExtractionStages[failure.CandidateKey] = failure.Stage
+		}
+	}
+	for key := range failureKeys {
+		stage, found := reportedExtractionStages[key]
+		if !found {
+			return fmt.Errorf("resume extraction failure candidate %q is missing from report failures", key)
+		}
+		for _, failure := range review.Failures {
+			if CandidateKey(failure.Candidate) == key && failure.Stage != stage {
+				return fmt.Errorf("resume extraction failure candidate %q has stage %q in report, want %q", key, stage, failure.Stage)
+			}
+		}
+	}
+	return nil
+}
+
+func rawCandidateKeys(candidates []RawCandidate, label string) (map[string]struct{}, error) {
+	keys := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		key := CandidateKey(candidate)
+		if _, exists := keys[key]; exists {
+			return nil, fmt.Errorf("resume %s contain duplicate candidate identity %q", label, key)
+		}
+		keys[key] = struct{}{}
+	}
+	return keys, nil
+}
+
+func normalizedCandidateKeys(candidates []NormalizedCandidate, label string) (map[string]NormalizedCandidate, error) {
+	keys := make(map[string]NormalizedCandidate, len(candidates))
+	for _, candidate := range candidates {
+		key := CandidateKey(candidate.Raw)
+		if _, exists := keys[key]; exists {
+			return nil, fmt.Errorf("resume %s contain duplicate candidate identity %q", label, key)
+		}
+		keys[key] = candidate
+	}
+	return keys, nil
+}
+
+func extractionFailureKeys(failures []ExtractionFailure) (map[string]struct{}, error) {
+	keys := make(map[string]struct{}, len(failures))
+	for _, failure := range failures {
+		key := CandidateKey(failure.Candidate)
+		if _, exists := keys[key]; exists {
+			return nil, fmt.Errorf("resume extraction failures contain duplicate candidate identity %q", key)
+		}
+		keys[key] = struct{}{}
+	}
+	return keys, nil
+}
+
+func unionKeySets(first, second map[string]struct{}) map[string]struct{} {
+	result := make(map[string]struct{}, len(first)+len(second))
+	for key := range first {
+		result[key] = struct{}{}
+	}
+	for key := range second {
+		result[key] = struct{}{}
+	}
+	return result
+}
+
+func requireKeySetMatches(want, got map[string]struct{}, wantLabel, gotLabel string) error {
+	if len(want) != len(got) {
+		return fmt.Errorf("resume %s and %s candidate counts are inconsistent", wantLabel, gotLabel)
+	}
+	for key := range want {
+		if _, ok := got[key]; !ok {
+			return fmt.Errorf("resume %s candidate %q is missing from %s", wantLabel, key, gotLabel)
+		}
+	}
+	return nil
+}
+
+func requireKeySetSubset(subset, superset map[string]struct{}, subsetLabel, supersetLabel string) error {
+	for key := range subset {
+		if _, ok := superset[key]; !ok {
+			return fmt.Errorf("resume %s candidate %q is missing from %s", subsetLabel, key, supersetLabel)
+		}
+	}
+	return nil
+}
+
+func isDatabaseLifecycleStage(stage string) bool {
+	switch stage {
+	case "connect", "schema", "empty_guard":
+		return true
+	default:
+		return false
+	}
 }
 
 func samePages(first, second []int) bool {

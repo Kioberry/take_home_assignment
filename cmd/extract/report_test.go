@@ -63,3 +63,32 @@ func TestReportStatesDatabaseResumeIsUnsupported(t *testing.T) {
 		t.Fatalf("database resume note = %q, want fresh-database limitation", report.DatabaseResumeNote)
 	}
 }
+
+func TestReportWritesNonNegativeRetryCountFromActualAttempts(t *testing.T) {
+	cfg := testConfig(t)
+	store, err := NewArtifactStore(cfg.RunRoot, cfg.RunID)
+	if err != nil {
+		t.Fatalf("NewArtifactStore: %v", err)
+	}
+
+	result := ExtractionResult{APICalls: 4, LogicalRequests: 3}
+	report := newRunReport(cfg, nil, result)
+	if report.RetryCount != 1 {
+		t.Fatalf("retry count = %d, want one retry", report.RetryCount)
+	}
+	if err := writePreDBArtifacts(store, nil, result, &report); err != nil {
+		t.Fatalf("writePreDBArtifacts: %v", err)
+	}
+	var persisted RunReport
+	if err := store.ReadJSON("report.json", &persisted); err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	if persisted.RetryCount != 1 || persisted.LogicalRequests != 3 {
+		t.Fatalf("persisted retry accounting = %#v, want one retry from three logical requests", persisted)
+	}
+
+	clamped := newRunReport(cfg, nil, ExtractionResult{APICalls: 1, LogicalRequests: 3})
+	if clamped.RetryCount != 0 {
+		t.Fatalf("retry count = %d, want non-negative zero", clamped.RetryCount)
+	}
+}

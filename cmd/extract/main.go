@@ -125,11 +125,8 @@ func parseConfig(args []string, getenv func(string) string) (Config, error) {
 }
 
 func run(ctx context.Context, cfg Config, deps Dependencies) error {
-	if deps.Validate == nil {
-		return errors.New("validate dependency is required")
-	}
-	if deps.OpenArtifacts == nil {
-		return errors.New("artifact dependency is required")
+	if err := validateDependencies(deps); err != nil {
+		return err
 	}
 	if err := deps.Validate(ctx, cfg); err != nil {
 		return safeError(err, cfg.APIKey)
@@ -148,9 +145,6 @@ func run(ctx context.Context, cfg Config, deps Dependencies) error {
 			return safeError(err, cfg.APIKey)
 		}
 	} else {
-		if deps.Render == nil || deps.OCR == nil || deps.Extract == nil {
-			return errors.New("render, OCR, and extraction dependencies are required")
-		}
 		pages, err = deps.Render(ctx, cfg, filepath.Join(store.Root(), "pages"))
 		if err != nil {
 			return safeError(fmt.Errorf("render pages: %w", err), cfg.APIKey)
@@ -171,25 +165,19 @@ func run(ctx context.Context, cfg Config, deps Dependencies) error {
 	if cfg.DryRun {
 		return runResultError(report)
 	}
-	if deps.Connect == nil {
-		return errors.New("connect dependency is required")
-	}
-	if deps.ApplySchema == nil || deps.EnsureEmptyCatalog == nil || deps.Persist == nil {
-		return errors.New("schema, catalog guard, and persistence dependencies are required")
-	}
 
 	pool, err := deps.Connect(ctx)
 	if err != nil {
-		return safeError(fmt.Errorf("connect database: %w", err), cfg.APIKey)
+		return terminalReportError(store, &report, "connect", fmt.Errorf("connect database: %w", err), cfg.APIKey)
 	}
 	if pool != nil {
 		defer pool.Close()
 	}
 	if err := deps.ApplySchema(ctx, pool); err != nil {
-		return safeError(fmt.Errorf("apply database schema: %w", err), cfg.APIKey)
+		return terminalReportError(store, &report, "schema", fmt.Errorf("apply database schema: %w", err), cfg.APIKey)
 	}
 	if err := deps.EnsureEmptyCatalog(ctx, pool); err != nil {
-		return safeError(fmt.Errorf("database guard: %w", err), cfg.APIKey)
+		return terminalReportError(store, &report, "empty_guard", fmt.Errorf("database guard: %w", err), cfg.APIKey)
 	}
 
 	candidates := append([]NormalizedCandidate(nil), result.Accepted...)
@@ -198,6 +186,7 @@ func run(ctx context.Context, cfg Config, deps Dependencies) error {
 		if err := deps.Persist(ctx, pool, candidate); err != nil {
 			report.Failures = append(report.Failures, RunFailure{
 				CandidateName: candidate.Raw.Name,
+				CandidateKey:  CandidateKey(candidate.Raw),
 				Stage:         "persistence",
 				Error:         safeError(err, cfg.APIKey).Error(),
 			})
@@ -210,6 +199,51 @@ func run(ctx context.Context, cfg Config, deps Dependencies) error {
 		return safeError(fmt.Errorf("write final report: %w", err), cfg.APIKey)
 	}
 	return runResultError(report)
+}
+
+func validateDependencies(deps Dependencies) error {
+	missing := make([]string, 0)
+	if deps.Validate == nil {
+		missing = append(missing, "validate dependency is required")
+	}
+	if deps.OpenArtifacts == nil {
+		missing = append(missing, "artifact dependency is required")
+	}
+	if deps.Render == nil {
+		missing = append(missing, "render dependency is required")
+	}
+	if deps.OCR == nil {
+		missing = append(missing, "OCR dependency is required")
+	}
+	if deps.Extract == nil {
+		missing = append(missing, "extraction dependency is required")
+	}
+	if deps.Connect == nil {
+		missing = append(missing, "connect dependency is required")
+	}
+	if deps.ApplySchema == nil {
+		missing = append(missing, "schema dependency is required")
+	}
+	if deps.EnsureEmptyCatalog == nil {
+		missing = append(missing, "empty catalog guard dependency is required")
+	}
+	if deps.Persist == nil {
+		missing = append(missing, "persistence dependency is required")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing injected dependencies: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+func terminalReportError(store *ArtifactStore, report *RunReport, stage string, err error, secret string) error {
+	safe := safeError(err, secret)
+	report.Failures = append(report.Failures, RunFailure{Stage: stage, Error: safe.Error()})
+	report.FailureCount = len(report.Failures)
+	if writeErr := store.WriteJSON("report.json", *report); writeErr != nil {
+		return fmt.Errorf("%s; write terminal report: %v", safe, safeError(writeErr, secret))
+	}
+	return fmt.Errorf("%s: %s", stage, safe)
 }
 
 func defaultDependencies() Dependencies {

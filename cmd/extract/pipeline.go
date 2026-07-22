@@ -48,7 +48,8 @@ func RunExtraction(ctx context.Context, ai AIExtractor, pages []Page, ocr []OCRP
 	batches := extractionBatches(pages, ocr, resolvedConfig)
 	rawBatches := make([][]RawCandidate, 0, len(batches))
 	for _, batch := range batches {
-		candidates, calls, err := extractCandidates(ctx, ai, ExtractRequest{OCR: batch.ocr, Mode: "extract"})
+		candidates, calls, requests, err := extractCandidates(ctx, ai, ExtractRequest{OCR: batch.ocr, Mode: "extract"})
+		result.LogicalRequests += requests
 		addAICallCounts(&result, calls)
 		if err != nil {
 			result.CompletenessIssues = append(result.CompletenessIssues, pipelineIssue("text_extraction_failed", fmt.Sprintf("text extraction for pages %s failed: %v", pageNumbers(batch.pages), err), false))
@@ -65,7 +66,8 @@ func RunExtraction(ctx context.Context, ai AIExtractor, pages []Page, ocr []OCRP
 			continue
 		}
 
-		final, failure, calls := recoverCandidate(ctx, ai, candidate, evaluation.issues, pageIndex, ocr, resolvedConfig)
+		final, failure, calls, requests := recoverCandidate(ctx, ai, candidate, evaluation.issues, pageIndex, ocr, resolvedConfig)
+		result.LogicalRequests += requests
 		addAICallCounts(&result, calls)
 		if failure != nil {
 			result.Failed = append(result.Failed, *failure)
@@ -80,14 +82,15 @@ func RunExtraction(ctx context.Context, ai AIExtractor, pages []Page, ocr []OCRP
 	return result
 }
 
-func extractCandidates(ctx context.Context, ai AIExtractor, request ExtractRequest) ([]RawCandidate, AICallCounts, error) {
+func extractCandidates(ctx context.Context, ai AIExtractor, request ExtractRequest) ([]RawCandidate, AICallCounts, int, error) {
 	if metered, found := ai.(AIExtractorWithMetrics); found {
-		return metered.ExtractWithMetrics(ctx, request)
+		candidates, calls, err := metered.ExtractWithMetrics(ctx, request)
+		return candidates, calls, 1, err
 	}
 	candidates, err := ai.Extract(ctx, request)
 	counts := AICallCounts{}
 	recordAIAttempt(&counts, request.Mode)
-	return candidates, counts, err
+	return candidates, counts, 1, err
 }
 
 func addAICallCounts(result *ExtractionResult, calls AICallCounts) {
@@ -97,33 +100,35 @@ func addAICallCounts(result *ExtractionResult, calls AICallCounts) {
 	result.APICalls += calls.APICalls
 }
 
-func recoverCandidate(ctx context.Context, ai AIExtractor, original RawCandidate, initialIssues []ValidationIssue, pageIndex map[int]Page, ocr []OCRPage, cfg Config) (NormalizedCandidate, *ExtractionFailure, AICallCounts) {
+func recoverCandidate(ctx context.Context, ai AIExtractor, original RawCandidate, initialIssues []ValidationIssue, pageIndex map[int]Page, ocr []OCRPage, cfg Config) (NormalizedCandidate, *ExtractionFailure, AICallCounts, int) {
 	calls := AICallCounts{}
+	logicalRequests := 0
 	selectedImages := recoveryPages(original.SourcePages, pageIndex)
 	selectedOCR := ocrForPages(ocr, selectedImages)
 	current := original
 	issues := append([]ValidationIssue(nil), initialIssues...)
 
 	if semanticRetryLimit(cfg) > 0 {
-		response, requestCalls, err := extractCandidates(ctx, ai, ExtractRequest{
+		response, requestCalls, requests, err := extractCandidates(ctx, ai, ExtractRequest{
 			OCR:    selectedOCR,
 			Images: selectedImages,
 			Prior:  []RawCandidate{current},
 			Issues: issues,
 			Mode:   "recover",
 		})
+		logicalRequests += requests
 		addAICallCountsToCounts(&calls, requestCalls)
 		if err != nil {
-			return NormalizedCandidate{}, recoveryFailure(current, "image", issues, err), calls
+			return NormalizedCandidate{}, recoveryFailure(current, "image", issues, err), calls, logicalRequests
 		}
 		candidate, failure := recoveredCandidate(current, response, "image", issues)
 		if failure != nil {
-			return NormalizedCandidate{}, failure, calls
+			return NormalizedCandidate{}, failure, calls, logicalRequests
 		}
 		current = candidate
 		evaluation := evaluateCandidate(current, pageIndex, nil)
 		if len(evaluation.issues) == 0 {
-			return evaluation.normalized, nil, calls
+			return evaluation.normalized, nil, calls, logicalRequests
 		}
 		issues = evaluation.issues
 		selectedImages = recoveryPages(current.SourcePages, pageIndex)
@@ -131,30 +136,31 @@ func recoverCandidate(ctx context.Context, ai AIExtractor, original RawCandidate
 	}
 
 	if reconciliationLimit(cfg) > 0 {
-		response, requestCalls, err := extractCandidates(ctx, ai, ExtractRequest{
+		response, requestCalls, requests, err := extractCandidates(ctx, ai, ExtractRequest{
 			OCR:    selectedOCR,
 			Images: selectedImages,
 			Prior:  []RawCandidate{current},
 			Issues: issues,
 			Mode:   "reconcile",
 		})
+		logicalRequests += requests
 		addAICallCountsToCounts(&calls, requestCalls)
 		if err != nil {
-			return NormalizedCandidate{}, recoveryFailure(current, "reconciliation", issues, err), calls
+			return NormalizedCandidate{}, recoveryFailure(current, "reconciliation", issues, err), calls, logicalRequests
 		}
 		candidate, failure := recoveredCandidate(current, response, "reconciliation", issues)
 		if failure != nil {
-			return NormalizedCandidate{}, failure, calls
+			return NormalizedCandidate{}, failure, calls, logicalRequests
 		}
 		current = candidate
 		evaluation := evaluateCandidate(current, pageIndex, nil)
 		if len(evaluation.issues) == 0 {
-			return evaluation.normalized, nil, calls
+			return evaluation.normalized, nil, calls, logicalRequests
 		}
-		return NormalizedCandidate{}, &ExtractionFailure{Candidate: current, Issues: evaluation.issues, Stage: "reconciliation"}, calls
+		return NormalizedCandidate{}, &ExtractionFailure{Candidate: current, Issues: evaluation.issues, Stage: "reconciliation"}, calls, logicalRequests
 	}
 
-	return NormalizedCandidate{}, &ExtractionFailure{Candidate: current, Issues: issues, Stage: "validation"}, calls
+	return NormalizedCandidate{}, &ExtractionFailure{Candidate: current, Issues: issues, Stage: "validation"}, calls, logicalRequests
 }
 
 func recoveredCandidate(original RawCandidate, response []RawCandidate, stage string, issues []ValidationIssue) (RawCandidate, *ExtractionFailure) {

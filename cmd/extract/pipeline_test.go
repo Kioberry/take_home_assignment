@@ -264,6 +264,9 @@ func TestRunExtractionUsesProviderAttemptMetricsWhenAvailable(t *testing.T) {
 	if result.TextCalls != 2 || result.ImageCalls != 0 || result.ReconciliationCalls != 0 || result.APICalls != 2 {
 		t.Fatalf("provider attempt accounting = %#v, want two actual text attempts", result)
 	}
+	if result.LogicalRequests != 1 {
+		t.Fatalf("logical request accounting = %d, want one request", result.LogicalRequests)
+	}
 }
 
 func TestRunExtractionPerCallMetricsDoNotCrossContaminateConcurrentRuns(t *testing.T) {

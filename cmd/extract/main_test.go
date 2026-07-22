@@ -438,6 +438,167 @@ func TestRunRequiresInjectedDatabaseDependencies(t *testing.T) {
 	}
 }
 
+func TestRunRejectsIncompleteDependenciesBeforeAnySideEffect(t *testing.T) {
+	cfg := testConfig(t)
+	deps := testDependencies(t, testExtractionResult(t, "Incomplete Item"))
+	var calls []string
+	deps.Validate = func(context.Context, Config) error {
+		calls = append(calls, "validate")
+		return nil
+	}
+	deps.OpenArtifacts = func(string, string) (*ArtifactStore, error) {
+		calls = append(calls, "artifacts")
+		return nil, errors.New("artifacts must not open")
+	}
+	deps.Render = func(context.Context, Config, string) ([]Page, error) {
+		calls = append(calls, "render")
+		return nil, errors.New("render must not run")
+	}
+	deps.OCR = nil
+	deps.Extract = func(context.Context, []Page, []OCRPage, Config) ExtractionResult {
+		calls = append(calls, "extract")
+		return ExtractionResult{}
+	}
+	deps.Connect = func(context.Context) (*pgxpool.Pool, error) {
+		calls = append(calls, "connect")
+		return nil, errors.New("database must not connect")
+	}
+	deps.ApplySchema = func(context.Context, *pgxpool.Pool) error {
+		calls = append(calls, "schema")
+		return nil
+	}
+	deps.EnsureEmptyCatalog = func(context.Context, *pgxpool.Pool) error {
+		calls = append(calls, "guard")
+		return nil
+	}
+	deps.Persist = func(context.Context, *pgxpool.Pool, NormalizedCandidate) error {
+		calls = append(calls, "persist")
+		return nil
+	}
+
+	err := run(context.Background(), cfg, deps)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "ocr dependency") {
+		t.Fatalf("run error = %v, want actionable missing OCR dependency", err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("dependency side effects = %#v, want none", calls)
+	}
+	entries, err := os.ReadDir(cfg.RunRoot)
+	if err != nil {
+		t.Fatalf("read artifact root: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("artifact root entries = %#v, want none", entries)
+	}
+}
+
+func TestResumeRejectsStaleReviewCandidateBeforeDatabaseWork(t *testing.T) {
+	cfg := testConfig(t)
+	result := testExtractionResult(t, "Current Item")
+	writeResumeArtifacts(t, cfg, result)
+	store, err := NewArtifactStore(cfg.RunRoot, cfg.RunID)
+	if err != nil {
+		t.Fatalf("NewArtifactStore: %v", err)
+	}
+	stale := testExtractionResult(t, "Stale Review Item").Accepted[0]
+	if err := store.WriteJSON("review.json", ReviewArtifact{Candidates: []NormalizedCandidate{stale}}); err != nil {
+		t.Fatalf("write stale review artifact: %v", err)
+	}
+	cfg.Resume = true
+	databaseCalls := 0
+	deps := testDependencies(t, ExtractionResult{})
+	deps.Connect = func(context.Context) (*pgxpool.Pool, error) {
+		databaseCalls++
+		return nil, errors.New("database must not be reached")
+	}
+	deps.ApplySchema = func(context.Context, *pgxpool.Pool) error { return nil }
+	deps.EnsureEmptyCatalog = func(context.Context, *pgxpool.Pool) error { return nil }
+	deps.Persist = func(context.Context, *pgxpool.Pool, NormalizedCandidate) error { return nil }
+
+	err = run(context.Background(), cfg, deps)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "review") {
+		t.Fatalf("resume integrity error = %v, want stale review rejection", err)
+	}
+	if databaseCalls != 0 {
+		t.Fatalf("database calls = %d, want none after stale review", databaseCalls)
+	}
+}
+
+func TestRunWritesTerminalReportForDatabaseLifecycleFailures(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		stage string
+		setup func(*Dependencies, string)
+	}{
+		{
+			name:  "connect",
+			stage: "connect",
+			setup: func(deps *Dependencies, secret string) {
+				deps.Connect = func(context.Context) (*pgxpool.Pool, error) {
+					return nil, fmt.Errorf("connection failed with %s", secret)
+				}
+			},
+		},
+		{
+			name:  "schema",
+			stage: "schema",
+			setup: func(deps *Dependencies, secret string) {
+				deps.Connect = func(context.Context) (*pgxpool.Pool, error) { return nil, nil }
+				deps.ApplySchema = func(context.Context, *pgxpool.Pool) error {
+					return fmt.Errorf("schema failed with %s", secret)
+				}
+			},
+		},
+		{
+			name:  "empty guard",
+			stage: "empty_guard",
+			setup: func(deps *Dependencies, secret string) {
+				deps.Connect = func(context.Context) (*pgxpool.Pool, error) { return nil, nil }
+				deps.ApplySchema = func(context.Context, *pgxpool.Pool) error { return nil }
+				deps.EnsureEmptyCatalog = func(context.Context, *pgxpool.Pool) error {
+					return fmt.Errorf("guard failed with %s", secret)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := testConfig(t)
+			cfg.APIKey = "database-secret"
+			deps := testDependencies(t, testExtractionResult(t, "Terminal Item"))
+			deps.ApplySchema = func(context.Context, *pgxpool.Pool) error { return nil }
+			deps.EnsureEmptyCatalog = func(context.Context, *pgxpool.Pool) error { return nil }
+			deps.Persist = func(context.Context, *pgxpool.Pool, NormalizedCandidate) error { return nil }
+			test.setup(&deps, cfg.APIKey)
+
+			err := run(context.Background(), cfg, deps)
+			if err == nil || !strings.Contains(strings.ToLower(err.Error()), test.stage) {
+				t.Fatalf("run error = %v, want %s failure", err, test.stage)
+			}
+			if strings.Contains(err.Error(), cfg.APIKey) {
+				t.Fatalf("run error contains API key: %v", err)
+			}
+
+			store, err := NewArtifactStore(cfg.RunRoot, cfg.RunID)
+			if err != nil {
+				t.Fatalf("NewArtifactStore: %v", err)
+			}
+			var report RunReport
+			if err := store.ReadJSON("report.json", &report); err != nil {
+				t.Fatalf("read terminal report: %v", err)
+			}
+			if report.FailureCount != 1 || len(report.Failures) != 1 {
+				t.Fatalf("terminal report = %#v, want one failure", report)
+			}
+			if report.Failures[0].Stage != test.stage || report.Failures[0].Error == "" {
+				t.Fatalf("terminal failure = %#v, want stage and message", report.Failures[0])
+			}
+			if strings.Contains(report.Failures[0].Error, cfg.APIKey) {
+				t.Fatalf("terminal report contains API key: %#v", report.Failures[0])
+			}
+		})
+	}
+}
+
 func TestRunReturnsNonzeroForCandidateAndCompletenessFailures(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.DryRun = true
@@ -538,6 +699,7 @@ func testExtractionResult(t *testing.T, name string) ExtractionResult {
 	}
 	return ExtractionResult{
 		Accepted:            []NormalizedCandidate{normalized},
+		LogicalRequests:     3,
 		TextCalls:           2,
 		ImageCalls:          1,
 		ReconciliationCalls: 1,
@@ -557,6 +719,16 @@ func testDependencies(t *testing.T, result ExtractionResult) Dependencies {
 			return []OCRPage{{Number: 1, Text: "OCR fixture"}}, nil
 		},
 		Extract: func(context.Context, []Page, []OCRPage, Config) ExtractionResult { return result },
+		Connect: func(context.Context) (*pgxpool.Pool, error) { return nil, nil },
+		ApplySchema: func(context.Context, *pgxpool.Pool) error {
+			return nil
+		},
+		EnsureEmptyCatalog: func(context.Context, *pgxpool.Pool) error {
+			return nil
+		},
+		Persist: func(context.Context, *pgxpool.Pool, NormalizedCandidate) error {
+			return nil
+		},
 	}
 }
 
@@ -583,6 +755,7 @@ func writeResumeArtifacts(t *testing.T, cfg Config, result ExtractionResult) {
 		ImageCalls:              result.ImageCalls,
 		ReconciliationCalls:     result.ReconciliationCalls,
 		APICalls:                result.APICalls,
+		LogicalRequests:         result.LogicalRequests,
 		DatabaseResumeSupported: false,
 	}
 	if err := store.WriteJSON("ocr.json", []OCRPage{{Number: 1, Text: "saved OCR"}}); err != nil {

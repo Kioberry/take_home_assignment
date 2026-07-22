@@ -132,6 +132,7 @@ type ExtractionResult struct {
 	Review              []NormalizedCandidate `json:"review"`
 	Failed              []ExtractionFailure   `json:"failed"`
 	CompletenessIssues  []ValidationIssue     `json:"completeness_issues"`
+	LogicalRequests     int                   `json:"logical_requests"`
 	TextCalls           int                   `json:"text_calls"`
 	ImageCalls          int                   `json:"image_calls"`
 	ReconciliationCalls int                   `json:"reconciliation_calls"`
