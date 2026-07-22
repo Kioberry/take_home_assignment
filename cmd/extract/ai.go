@@ -236,6 +236,14 @@ func objectSchema(properties map[string]any, required ...string) map[string]any 
 }
 
 func parseResponse(body io.Reader) ([]RawCandidate, error) {
+	bodyBytes, err := io.ReadAll(io.LimitReader(body, maxResponseBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read Responses response: %w", err)
+	}
+	if len(bodyBytes) > maxResponseBytes {
+		return nil, fmt.Errorf("Responses API response too large")
+	}
+
 	var response struct {
 		Output []struct {
 			Content []struct {
@@ -245,7 +253,7 @@ func parseResponse(body io.Reader) ([]RawCandidate, error) {
 			} `json:"content"`
 		} `json:"output"`
 	}
-	decoder := json.NewDecoder(io.LimitReader(body, 10<<20))
+	decoder := json.NewDecoder(bytes.NewReader(bodyBytes))
 	if err := decoder.Decode(&response); err != nil {
 		return nil, fmt.Errorf("decode Responses response: %w", err)
 	}
@@ -289,8 +297,8 @@ func decodeStructuredCandidates(data []byte) ([]RawCandidate, error) {
 		return nil, fmt.Errorf("decode structured output: missing required candidates")
 	}
 
-	var candidatesJSON []json.RawMessage
-	if err := decodeJSON(rawCandidates, &candidatesJSON); err != nil {
+	candidatesJSON, err := decodeRequiredArray(rawCandidates, "candidates")
+	if err != nil {
 		return nil, fmt.Errorf("decode structured output candidates: %w", err)
 	}
 	candidates := make([]RawCandidate, 0, len(candidatesJSON))
@@ -312,10 +320,16 @@ func decodeCandidate(data json.RawMessage) (RawCandidate, error) {
 	if err := requireFields(fields, "candidate", rawCandidateFields...); err != nil {
 		return RawCandidate{}, err
 	}
-	if err := requireArrayObjectFields(fields["effects"], "effect", rawEffectFields...); err != nil {
+	if _, err := decodeRequiredArray(fields["source_pages"], "candidate.source_pages"); err != nil {
 		return RawCandidate{}, err
 	}
-	if err := requireArrayObjectFields(fields["limitations"], "limitation", rawLimitationFields...); err != nil {
+	if err := requireArrayObjectFields(fields["effects"], "candidate.effects", "effect", rawEffectFields...); err != nil {
+		return RawCandidate{}, err
+	}
+	if err := requireArrayObjectFields(fields["limitations"], "candidate.limitations", "limitation", rawLimitationFields...); err != nil {
+		return RawCandidate{}, err
+	}
+	if _, err := decodeRequiredArray(fields["review_reasons"], "candidate.review_reasons"); err != nil {
 		return RawCandidate{}, err
 	}
 
@@ -342,13 +356,10 @@ func decodeObject(data []byte) (map[string]json.RawMessage, error) {
 	return fields, nil
 }
 
-func requireArrayObjectFields(data json.RawMessage, kind string, required ...string) error {
-	var objects []json.RawMessage
-	if err := decodeJSON(data, &objects); err != nil {
-		return fmt.Errorf("decode %s array: %w", kind, err)
-	}
-	if objects == nil {
-		return fmt.Errorf("%s array must not be null", kind)
+func requireArrayObjectFields(data json.RawMessage, arrayName, kind string, required ...string) error {
+	objects, err := decodeRequiredArray(data, arrayName)
+	if err != nil {
+		return err
 	}
 	for _, object := range objects {
 		fields, err := decodeObject(object)
@@ -360,6 +371,17 @@ func requireArrayObjectFields(data json.RawMessage, kind string, required ...str
 		}
 	}
 	return nil
+}
+
+func decodeRequiredArray(data json.RawMessage, name string) ([]json.RawMessage, error) {
+	var values []json.RawMessage
+	if err := decodeJSON(data, &values); err != nil {
+		return nil, fmt.Errorf("decode %s array: %w", name, err)
+	}
+	if values == nil {
+		return nil, fmt.Errorf("%s array must not be null", name)
+	}
+	return values, nil
 }
 
 func requireFields(fields map[string]json.RawMessage, kind string, required ...string) error {
@@ -400,6 +422,8 @@ var rawCandidateFields = []string{
 var rawEffectFields = []string{"category_raw", "description"}
 
 var rawLimitationFields = []string{"effect_index", "description"}
+
+const maxResponseBytes = 10 << 20
 
 func isRetryableStatus(status int) bool {
 	return status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || status >= http.StatusInternalServerError

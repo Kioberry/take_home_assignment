@@ -239,6 +239,63 @@ func TestOpenAIExtractorRetriesRequestTimeoutAndServerError(t *testing.T) {
 	}
 }
 
+func TestOpenAIExtractorRejectsNullArrays(t *testing.T) {
+	t.Run("root candidates", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			writeResponse(t, w, outputTextResponse(`{"candidates":null}`))
+		}))
+		defer server.Close()
+
+		extractor := NewOpenAIExtractor(server.Client(), server.URL, "test-key", "text-model", "vision-model", 1)
+		_, err := extractor.Extract(context.Background(), ExtractRequest{OCR: []OCRPage{{Number: 1, Text: "item"}}})
+		if err == nil || !strings.Contains(err.Error(), "candidates array must not be null") {
+			t.Fatalf("error = %v, want null candidates error", err)
+		}
+	})
+
+	for _, field := range []string{"source_pages", "effects", "limitations", "review_reasons"} {
+		t.Run(field, func(t *testing.T) {
+			candidate := candidateJSON(t)
+			candidate[field] = nil
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				writeResponse(t, w, successfulResponse(candidate))
+			}))
+			defer server.Close()
+
+			extractor := NewOpenAIExtractor(server.Client(), server.URL, "test-key", "text-model", "vision-model", 1)
+			_, err := extractor.Extract(context.Background(), ExtractRequest{OCR: []OCRPage{{Number: 1, Text: "item"}}})
+			if err == nil || !strings.Contains(err.Error(), "candidate."+field+" array must not be null") {
+				t.Fatalf("error = %v, want null %s error", err, field)
+			}
+		})
+	}
+}
+
+func TestOpenAIExtractorAcceptsEmptyArrays(t *testing.T) {
+	candidate := candidateJSON(t)
+	for _, field := range []string{"source_pages", "effects", "limitations", "review_reasons"} {
+		candidate[field] = []any{}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeResponse(t, w, successfulResponse(candidate))
+	}))
+	defer server.Close()
+
+	extractor := NewOpenAIExtractor(server.Client(), server.URL, "test-key", "text-model", "vision-model", 1)
+	candidates, err := extractor.Extract(context.Background(), ExtractRequest{OCR: []OCRPage{{Number: 1, Text: "item"}}})
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("candidates=%#v err=%v, want one candidate with empty arrays", candidates, err)
+	}
+}
+
+func TestParseResponseRejectsBodyOverLimit(t *testing.T) {
+	response := mustJSON(successfulResponse(candidateJSON(t)))
+	_, err := parseResponse(strings.NewReader(response + strings.Repeat(" ", 10<<20)))
+	if err == nil || !strings.Contains(err.Error(), "response too large") {
+		t.Fatalf("error = %v, want response too large error", err)
+	}
+}
+
 func assertResponsesRequest(t *testing.T, r *http.Request, wantModel string, wantImage bool) {
 	t.Helper()
 	if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" {
@@ -357,11 +414,15 @@ func assertNullable(t *testing.T, schema map[string]any, valueType string) {
 }
 
 func successfulResponse(candidate map[string]any) map[string]any {
+	return outputTextResponse(mustJSON(candidateWrapper(candidate)))
+}
+
+func outputTextResponse(text string) map[string]any {
 	return map[string]any{
 		"output": []any{
 			map[string]any{"type": "reasoning", "summary": []any{}},
 			map[string]any{"type": "message", "content": []any{
-				map[string]any{"type": "output_text", "text": mustJSON(candidateWrapper(candidate))},
+				map[string]any{"type": "output_text", "text": text},
 			}},
 		},
 	}
