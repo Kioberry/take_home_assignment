@@ -1,0 +1,303 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"mime"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+type ExtractRequest struct {
+	OCR    []OCRPage
+	Images []Page
+	Prior  []RawCandidate
+	Issues []ValidationIssue
+	Mode   string
+}
+
+type AIExtractor interface {
+	Extract(context.Context, ExtractRequest) ([]RawCandidate, error)
+}
+
+type OpenAIExtractor struct {
+	httpClient  *http.Client
+	apiURL      string
+	apiKey      string
+	textModel   string
+	visionModel string
+	maxAttempts int
+}
+
+func NewOpenAIExtractor(httpClient *http.Client, apiURL, apiKey, textModel, visionModel string, maxAttempts int) *OpenAIExtractor {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	return &OpenAIExtractor{
+		httpClient:  httpClient,
+		apiURL:      responseURL(apiURL),
+		apiKey:      apiKey,
+		textModel:   textModel,
+		visionModel: visionModel,
+		maxAttempts: maxAttempts,
+	}
+}
+
+func (e *OpenAIExtractor) Extract(ctx context.Context, request ExtractRequest) ([]RawCandidate, error) {
+	payload, err := e.requestPayload(request)
+	if err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal Responses request: %w", err)
+	}
+
+	for attempt := 0; attempt < e.maxAttempts; attempt++ {
+		response, err := e.doRequest(ctx, body)
+		if err != nil {
+			return nil, err
+		}
+		if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
+			candidates, err := parseResponse(response.Body)
+			response.Body.Close()
+			return candidates, err
+		}
+		status := response.StatusCode
+		response.Body.Close()
+		if !isRetryableStatus(status) || attempt == e.maxAttempts-1 {
+			return nil, fmt.Errorf("Responses API returned HTTP %d", status)
+		}
+		if err := waitForRetry(ctx, attempt); err != nil {
+			return nil, err
+		}
+	}
+
+	return nil, fmt.Errorf("Responses API attempts exhausted")
+}
+
+func (e *OpenAIExtractor) doRequest(ctx context.Context, body []byte) (*http.Response, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, e.apiURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create Responses request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+e.apiKey)
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := e.httpClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("send Responses request: %w", err)
+	}
+	return response, nil
+}
+
+func (e *OpenAIExtractor) requestPayload(request ExtractRequest) (map[string]any, error) {
+	model := e.textModel
+	if len(request.Images) > 0 {
+		model = e.visionModel
+	}
+	content := []map[string]any{{
+		"type": "input_text",
+		"text": requestText(request),
+	}}
+	for _, page := range request.Images {
+		imageURL, err := imageDataURL(page.ImagePath)
+		if err != nil {
+			return nil, err
+		}
+		content = append(content, map[string]any{
+			"type":      "input_image",
+			"image_url": imageURL,
+		})
+	}
+
+	return map[string]any{
+		"model": model,
+		"input": []map[string]any{
+			{
+				"role": "system",
+				"content": []map[string]any{{
+					"type": "input_text",
+					"text": extractionSystemPrompt,
+				}},
+			},
+			{"role": "user", "content": content},
+		},
+		"text": map[string]any{
+			"format": map[string]any{
+				"type":   "json_schema",
+				"name":   "catalog_candidates",
+				"strict": true,
+				"schema": candidateSchema(),
+			},
+		},
+	}, nil
+}
+
+func responseURL(apiURL string) string {
+	apiURL = strings.TrimRight(apiURL, "/")
+	if strings.HasSuffix(apiURL, "/v1/responses") {
+		return apiURL
+	}
+	return apiURL + "/v1/responses"
+}
+
+func imageDataURL(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read page image: %w", err)
+	}
+	contentType := mime.TypeByExtension(filepath.Ext(path))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data), nil
+}
+
+func requestText(request ExtractRequest) string {
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "Mode: %s\n", request.Mode)
+	for _, page := range request.OCR {
+		fmt.Fprintf(&builder, "\nOCR page %d:\n%s\n", page.Number, page.Text)
+	}
+	if len(request.Prior) > 0 {
+		prior, _ := json.Marshal(request.Prior)
+		fmt.Fprintf(&builder, "\nPrior candidates for reconciliation: %s\n", prior)
+	}
+	if len(request.Issues) > 0 {
+		issues, _ := json.Marshal(request.Issues)
+		fmt.Fprintf(&builder, "\nValidation issues: %s\n", issues)
+	}
+	return builder.String()
+}
+
+func candidateSchema() map[string]any {
+	stringOrNull := func() map[string]any {
+		return map[string]any{"anyOf": []any{map[string]any{"type": "string"}, map[string]any{"type": "null"}}}
+	}
+	integerOrNull := func() map[string]any {
+		return map[string]any{"anyOf": []any{map[string]any{"type": "integer"}, map[string]any{"type": "null"}}}
+	}
+	effect := objectSchema(map[string]any{
+		"category_raw": map[string]any{"type": "string"},
+		"description":  map[string]any{"type": "string"},
+	}, "category_raw", "description")
+	limitation := objectSchema(map[string]any{
+		"effect_index": integerOrNull(),
+		"description":  map[string]any{"type": "string"},
+	}, "effect_index", "description")
+	candidate := objectSchema(map[string]any{
+		"name":                    map[string]any{"type": "string"},
+		"source_pages":            map[string]any{"type": "array", "items": map[string]any{"type": "integer"}},
+		"source_item_type_raw":    map[string]any{"type": "string"},
+		"source_item_subtype_raw": stringOrNull(),
+		"rarity_raw":              map[string]any{"type": "string"},
+		"usage_mode_raw":          map[string]any{"type": "string"},
+		"wear_slot_raw":           stringOrNull(),
+		"requires_attunement":     map[string]any{"type": "boolean"},
+		"attunement_requirement":  stringOrNull(),
+		"raw_description":         map[string]any{"type": "string"},
+		"effects":                 map[string]any{"type": "array", "items": effect},
+		"limitations":             map[string]any{"type": "array", "items": limitation},
+		"confidence":              map[string]any{"type": "number"},
+		"review_reasons":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		"continuation":            map[string]any{"type": "boolean"},
+	},
+		"name", "source_pages", "source_item_type_raw", "source_item_subtype_raw", "rarity_raw",
+		"usage_mode_raw", "wear_slot_raw", "requires_attunement", "attunement_requirement",
+		"raw_description", "effects", "limitations", "confidence", "review_reasons", "continuation",
+	)
+	return objectSchema(map[string]any{
+		"candidates": map[string]any{"type": "array", "items": candidate},
+	}, "candidates")
+}
+
+func objectSchema(properties map[string]any, required ...string) map[string]any {
+	fields := make([]any, len(required))
+	for index, field := range required {
+		fields[index] = field
+	}
+	return map[string]any{
+		"type":                 "object",
+		"properties":           properties,
+		"required":             fields,
+		"additionalProperties": false,
+	}
+}
+
+func parseResponse(body io.Reader) ([]RawCandidate, error) {
+	var response struct {
+		Output []struct {
+			Content []struct {
+				Type    string `json:"type"`
+				Text    string `json:"text"`
+				Refusal string `json:"refusal"`
+			} `json:"content"`
+		} `json:"output"`
+	}
+	if err := json.NewDecoder(io.LimitReader(body, 10<<20)).Decode(&response); err != nil {
+		return nil, fmt.Errorf("decode Responses response: %w", err)
+	}
+
+	var outputText string
+	for _, output := range response.Output {
+		for _, content := range output.Content {
+			switch content.Type {
+			case "refusal":
+				return nil, fmt.Errorf("Responses API refusal: %s", content.Refusal)
+			case "output_text":
+				if outputText != "" {
+					return nil, fmt.Errorf("Responses API returned multiple output_text parts")
+				}
+				outputText = content.Text
+			}
+		}
+	}
+	if strings.TrimSpace(outputText) == "" {
+		return nil, fmt.Errorf("Responses API response has no output_text")
+	}
+
+	decoder := json.NewDecoder(strings.NewReader(outputText))
+	decoder.DisallowUnknownFields()
+	var result struct {
+		Candidates []RawCandidate `json:"candidates"`
+	}
+	if err := decoder.Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode structured output: %w", err)
+	}
+	if decoder.More() {
+		return nil, fmt.Errorf("decode structured output: trailing JSON data")
+	}
+	return result.Candidates, nil
+}
+
+func isRetryableStatus(status int) bool {
+	return status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
+}
+
+func waitForRetry(ctx context.Context, attempt int) error {
+	delay := 250 * time.Millisecond
+	if attempt > 0 {
+		delay = 750 * time.Millisecond
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+const extractionSystemPrompt = `You extract catalog items from supplied source evidence. Identify semantic item boundaries and preserve descriptions. Emit complete candidates or set continuation=true when the source continues an item. Use only source evidence. When uncertain, return null for nullable fields and add a review reason. Effect indexes are zero-based. Source page numbers must come from supplied page labels.`
