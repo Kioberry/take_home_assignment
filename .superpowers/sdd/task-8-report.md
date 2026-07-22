@@ -51,6 +51,8 @@ isolated PostgreSQL integration boundaries; no external AI API was called.
 
 - `87d0e7 feat: wire extraction CLI and reporting`
 - `83676ad fix: require injected extraction dependencies`
+- `babab34 fix: harden CLI resume and failure reporting`
+- `e545f05 fix: close resume artifact graph gap` (final fix)
 
 ## Self-review
 
@@ -81,8 +83,8 @@ isolated PostgreSQL integration boundaries; no external AI API was called.
 ### Scope and root-cause evidence
 
 The review target was the isolated `extraction-pipeline` worktree at the
-`87d0e7d` Task 8 implementation, with the existing follow-up `83676ad` at
-HEAD. The worktree was clean before edits. The follow-up only checked missing
+pre-fix `babab34` Task 8 hardening commit. The final graph-gap fix is
+`e545f05`. The worktree was clean before edits. The follow-up only checked missing
 dependencies at the point where each path needed them: `run` could already
 call the injected validator and artifact opener, and the original resume
 loader only compared array lengths before replacing normalized review records
@@ -151,8 +153,9 @@ the requested controlled escalation. No external AI request was made.
 - Resume loading now validates report counts and the complete candidate graph.
   Raw, normalized, review, extraction-failure, and report candidate identities
   use `CandidateKey`; duplicates, missing members, stale review records,
-  inconsistent `NeedsReview` state, missing report failures, and stage
-  mismatches are rejected before database connection.
+  inconsistent `NeedsReview` state, orphan/duplicate report extraction
+  failures, missing report failures, and stage mismatches are rejected before
+  database connection.
 - `ExtractionResult` records logical API requests. `RunReport` persists both
   `logical_requests` and `retry_count`, where retry count is
   `max(api_calls-logical_requests, 0)`. Provider attempt metrics and resume
@@ -185,5 +188,5 @@ Changed Task 8 review-hardening files:
 - Resume still intentionally replays into a fresh empty database; this change
   hardens artifact integrity and failure reporting without adding database
   idempotency.
-- The final fix commit SHA is recorded at handoff after the single commit is
-  created.
+- The final fix is committed as `e545f05`; no live PDF/binary/OpenAI smoke test
+  was run.
