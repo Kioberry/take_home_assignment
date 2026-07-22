@@ -1,6 +1,7 @@
 # Build output
 /bin/
 *.exe
+.worktrees/
 
 # Local env / secrets
 .env
