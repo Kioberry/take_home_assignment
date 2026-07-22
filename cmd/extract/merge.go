@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -42,9 +43,15 @@ func MergeCandidates(batches [][]RawCandidate) (merged []RawCandidate, conflicts
 	}
 
 	// Page order makes fragment descriptions and output order independent of
-	// which overlapping batch happened to return first.
-	sort.SliceStable(flattened, func(i, j int) bool {
-		return candidatePageStart(flattened[i]) < candidatePageStart(flattened[j])
+	// which overlapping batch happened to return first. The canonical full
+	// candidate serialization breaks same-page ties, including candidates that
+	// share a CandidateKey but differ in conflicting or unioned fields.
+	sort.Slice(flattened, func(i, j int) bool {
+		firstPage, secondPage := candidatePageStart(flattened[i]), candidatePageStart(flattened[j])
+		if firstPage != secondPage {
+			return firstPage < secondPage
+		}
+		return canonicalCandidateOrderKey(flattened[i]) < canonicalCandidateOrderKey(flattened[j])
 	})
 
 	groups := make([]candidateMergeGroup, 0, len(flattened))
@@ -81,6 +88,44 @@ func MergeCandidates(batches [][]RawCandidate) (merged []RawCandidate, conflicts
 		merged = append(merged, group.candidate)
 	}
 	return merged, conflicts
+}
+
+func canonicalCandidateOrderKey(candidate RawCandidate) string {
+	value := struct {
+		Name                  string          `json:"name"`
+		SourcePages           []int           `json:"source_pages"`
+		SourceItemTypeRaw     string          `json:"source_item_type_raw"`
+		SourceItemSubtypeRaw  *string         `json:"source_item_subtype_raw"`
+		RarityRaw             string          `json:"rarity_raw"`
+		UsageModeRaw          string          `json:"usage_mode_raw"`
+		WearSlotRaw           *string         `json:"wear_slot_raw"`
+		RequiresAttunement    bool            `json:"requires_attunement"`
+		AttunementRequirement *string         `json:"attunement_requirement"`
+		RawDescription        string          `json:"raw_description"`
+		Effects               []RawEffect     `json:"effects"`
+		Limitations           []RawLimitation `json:"limitations"`
+		Confidence            string          `json:"confidence"`
+		ReviewReasons         []string        `json:"review_reasons"`
+		Continuation          bool            `json:"continuation"`
+	}{
+		Name:                  candidate.Name,
+		SourcePages:           candidate.SourcePages,
+		SourceItemTypeRaw:     candidate.SourceItemTypeRaw,
+		SourceItemSubtypeRaw:  candidate.SourceItemSubtypeRaw,
+		RarityRaw:             candidate.RarityRaw,
+		UsageModeRaw:          candidate.UsageModeRaw,
+		WearSlotRaw:           candidate.WearSlotRaw,
+		RequiresAttunement:    candidate.RequiresAttunement,
+		AttunementRequirement: candidate.AttunementRequirement,
+		RawDescription:        candidate.RawDescription,
+		Effects:               candidate.Effects,
+		Limitations:           candidate.Limitations,
+		Confidence:            strconv.FormatFloat(candidate.Confidence, 'g', -1, 64),
+		ReviewReasons:         candidate.ReviewReasons,
+		Continuation:          candidate.Continuation,
+	}
+	encoded, _ := json.Marshal(value)
+	return string(encoded)
 }
 
 func canMergeCandidates(group candidateMergeGroup, candidate RawCandidate) bool {

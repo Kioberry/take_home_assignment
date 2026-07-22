@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"reflect"
 	"sort"
 	"strings"
@@ -211,4 +213,48 @@ func TestMergeCandidatesOutputIsDeterministic(t *testing.T) {
 	if !reflect.DeepEqual(one, two) || !reflect.DeepEqual(oneConflicts, twoConflicts) {
 		t.Fatalf("repeated merge differs: first=%#v/%#v second=%#v/%#v", one, oneConflicts, two, twoConflicts)
 	}
+}
+
+func TestMergeCandidatesIsPermutationInvariantForSameEarliestPage(t *testing.T) {
+	first := mergeCandidate("Shared Relic", []int{7}, "Alpha source text.", false)
+	first.SourceItemSubtypeRaw = stringPointer("alpha subtype")
+	first.RarityRaw = "rare"
+	first.Effects = []RawEffect{{CategoryRaw: "alpha", Description: "Alpha effect."}}
+	first.ReviewReasons = []string{"alpha reason"}
+	second := mergeCandidate("Shared Relic", []int{7}, "Beta source text.", true)
+	second.SourceItemSubtypeRaw = stringPointer("beta subtype")
+	second.RarityRaw = "legendary"
+	second.Effects = []RawEffect{{CategoryRaw: "beta", Description: "Beta effect."}}
+	second.ReviewReasons = []string{"beta reason"}
+
+	forwardCandidates, forwardConflicts := MergeCandidates([][]RawCandidate{{first, second}})
+	reversedCandidates, reversedConflicts := MergeCandidates([][]RawCandidate{{second, first}})
+
+	if !reflect.DeepEqual(forwardCandidates, reversedCandidates) {
+		t.Fatalf("merged candidates depend on input permutation:\nforward=%#v\nreversed=%#v", forwardCandidates, reversedCandidates)
+	}
+	if !reflect.DeepEqual(forwardConflicts, reversedConflicts) {
+		t.Fatalf("conflicts depend on input permutation:\nforward=%#v\nreversed=%#v", forwardConflicts, reversedConflicts)
+	}
+	forwardBytes, err := json.Marshal(struct {
+		Candidates []RawCandidate
+		Conflicts  []ValidationIssue
+	}{forwardCandidates, forwardConflicts})
+	if err != nil {
+		t.Fatalf("marshal forward result: %v", err)
+	}
+	reversedBytes, err := json.Marshal(struct {
+		Candidates []RawCandidate
+		Conflicts  []ValidationIssue
+	}{reversedCandidates, reversedConflicts})
+	if err != nil {
+		t.Fatalf("marshal reversed result: %v", err)
+	}
+	if !bytes.Equal(forwardBytes, reversedBytes) {
+		t.Fatalf("serialized result depends on input permutation:\nforward=%s\nreversed=%s", forwardBytes, reversedBytes)
+	}
+}
+
+func stringPointer(value string) *string {
+	return &value
 }
