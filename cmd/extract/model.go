@@ -96,6 +96,28 @@ type ValidationIssue struct {
 	Recoverable bool   `json:"recoverable"`
 }
 
+// ExtractionFailure keeps a source candidate out of the accepted and review
+// buckets together with the final recovery stage and concrete reasons.
+type ExtractionFailure struct {
+	Candidate RawCandidate      `json:"candidate"`
+	Issues    []ValidationIssue `json:"issues"`
+	Stage     string            `json:"stage"`
+}
+
+// ExtractionResult is the bounded-recovery outcome consumed by later
+// persistence and reporting steps. Each extracted candidate belongs to exactly
+// one of Accepted, Review, or Failed. Call counts are retained for run reports.
+type ExtractionResult struct {
+	Accepted            []NormalizedCandidate `json:"accepted"`
+	Review              []NormalizedCandidate `json:"review"`
+	Failed              []ExtractionFailure   `json:"failed"`
+	CompletenessIssues  []ValidationIssue     `json:"completeness_issues"`
+	TextCalls           int                   `json:"text_calls"`
+	ImageCalls          int                   `json:"image_calls"`
+	ReconciliationCalls int                   `json:"reconciliation_calls"`
+	APICalls            int                   `json:"api_calls"`
+}
+
 type RunState struct {
 	RunID      string                `json:"run_id"`
 	Pages      []Page                `json:"pages"`
