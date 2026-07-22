@@ -37,6 +37,12 @@ func (s *ArtifactStore) WriteJSON(name string, value any) error {
 	if err != nil {
 		return err
 	}
+	if err := os.MkdirAll(s.root, 0755); err != nil {
+		return fmt.Errorf("create artifact directory %s: %w", s.root, err)
+	}
+	if err := os.Chmod(s.root, 0755); err != nil {
+		return fmt.Errorf("set artifact directory mode %s: %w", s.root, err)
+	}
 	tmpPath := path + ".tmp"
 	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
@@ -45,13 +51,16 @@ func (s *ArtifactStore) WriteJSON(name string, value any) error {
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(value); err != nil {
-		file.Close()
+		_ = file.Close()
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("encode artifact %s: %w", name, err)
 	}
 	if err := file.Close(); err != nil {
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("close temporary artifact %s: %w", tmpPath, err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("replace artifact %s: %w", path, err)
 	}
 	return nil
