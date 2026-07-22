@@ -54,6 +54,48 @@ func TestRunExtractionBatchesOCRWithOnePageOverlapAndDoesNotRecoverValidCandidat
 	}
 }
 
+func TestRunExtractionAppliesDefaultBatchAndOverlapForZeroConfig(t *testing.T) {
+	first := pipelineCandidate("First", 1)
+	second := pipelineCandidate("Second", 6)
+	ai := &scriptedAI{t: t, responses: [][]RawCandidate{{first}, {second}}}
+
+	_ = RunExtraction(context.Background(), ai, pipelinePages(1, 9), pipelineOCR(1, 9), Config{})
+
+	if len(ai.requests) != 2 {
+		t.Fatalf("AI calls = %d, want 2 default-sized batches", len(ai.requests))
+	}
+	assertRequestPages(t, ai.requests[0].OCR, []int{1, 2, 3, 4, 5})
+	assertRequestPages(t, ai.requests[1].OCR, []int{5, 6, 7, 8, 9})
+}
+
+func TestRunExtractionAppliesDefaultRecoveryLimitsForZeroConfig(t *testing.T) {
+	textInvalid := pipelineCandidate("Unclear", 1)
+	textInvalid.RarityRaw = "mythic"
+	imageInvalid := pipelineCandidate("Unclear", 1)
+	imageInvalid.RarityRaw = "unknown"
+	reconciledInvalid := pipelineCandidate("Unclear", 1)
+	reconciledInvalid.RarityRaw = "unresolved"
+	ai := &scriptedAI{t: t, responses: [][]RawCandidate{{textInvalid}, {imageInvalid}, {reconciledInvalid}}}
+
+	result := RunExtraction(context.Background(), ai, pipelinePages(1, 1), pipelineOCR(1, 1), Config{SelectedPages: []int{1}})
+
+	if len(ai.requests) != 3 || result.TextCalls != 1 || result.ImageCalls != 1 || result.ReconciliationCalls != 1 || result.APICalls != 3 {
+		t.Fatalf("default recovery accounting = requests:%d result:%#v, want one text, image, and reconciliation call", len(ai.requests), result)
+	}
+}
+
+func TestRunExtractionRecordsNegativeConfigurationInsteadOfDefaulting(t *testing.T) {
+	ai := &scriptedAI{t: t}
+	result := RunExtraction(context.Background(), ai, pipelinePages(1, 1), pipelineOCR(1, 1), Config{BatchSize: -1})
+
+	if !hasIssueCode(result.CompletenessIssues, "invalid_config") {
+		t.Fatalf("configuration issues = %#v, want invalid_config", result.CompletenessIssues)
+	}
+	if len(ai.requests) != 0 {
+		t.Fatalf("AI calls = %d, want none for invalid config", len(ai.requests))
+	}
+}
+
 func TestRunExtractionRecoversOnlyInvalidCandidateWithSourceAndAdjacentImages(t *testing.T) {
 	invalid := pipelineCandidate("Blurred", 2)
 	invalid.RarityRaw = "mythic"
@@ -211,6 +253,19 @@ func TestRunExtractionReportsFullRunCompletenessFailures(t *testing.T) {
 	}
 }
 
+func TestRunExtractionUsesProviderAttemptMetricsWhenAvailable(t *testing.T) {
+	provider := &meteredScriptedAI{
+		scriptedAI: scriptedAI{t: t, responses: [][]RawCandidate{{pipelineCandidate("Retried", 1)}}},
+		increments: []AICallCounts{{TextCalls: 2, APICalls: 2}},
+	}
+
+	result := RunExtraction(context.Background(), provider, pipelinePages(1, 1), pipelineOCR(1, 1), Config{SelectedPages: []int{1}})
+
+	if result.TextCalls != 2 || result.ImageCalls != 0 || result.ReconciliationCalls != 0 || result.APICalls != 2 {
+		t.Fatalf("provider attempt accounting = %#v, want two actual text attempts", result)
+	}
+}
+
 func pipelineCandidate(name string, page int) RawCandidate {
 	candidate := validRawCandidate()
 	candidate.Name = name
@@ -267,4 +322,27 @@ func hasIssueCode(issues []ValidationIssue, code string) bool {
 		}
 	}
 	return false
+}
+
+type meteredScriptedAI struct {
+	scriptedAI
+	increments []AICallCounts
+	counts     AICallCounts
+}
+
+func (ai *meteredScriptedAI) Extract(ctx context.Context, request ExtractRequest) ([]RawCandidate, error) {
+	candidates, err := ai.scriptedAI.Extract(ctx, request)
+	if len(ai.increments) > 0 {
+		increment := ai.increments[0]
+		ai.counts.TextCalls += increment.TextCalls
+		ai.counts.ImageCalls += increment.ImageCalls
+		ai.counts.ReconciliationCalls += increment.ReconciliationCalls
+		ai.counts.APICalls += increment.APICalls
+		ai.increments = ai.increments[1:]
+	}
+	return candidates, err
+}
+
+func (ai *meteredScriptedAI) CallCounts() AICallCounts {
+	return ai.counts
 }

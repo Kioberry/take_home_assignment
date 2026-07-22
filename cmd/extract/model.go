@@ -96,6 +96,21 @@ type ValidationIssue struct {
 	Recoverable bool   `json:"recoverable"`
 }
 
+// AICallCounts records HTTP request attempts rather than only logical
+// extraction operations. A retry therefore contributes another call.
+type AICallCounts struct {
+	TextCalls           int `json:"text_calls"`
+	ImageCalls          int `json:"image_calls"`
+	ReconciliationCalls int `json:"reconciliation_calls"`
+	APICalls            int `json:"api_calls"`
+}
+
+// AICallMetrics is an optional snapshot interface. AIExtractor remains the
+// stable extraction contract for simple fakes and alternative providers.
+type AICallMetrics interface {
+	CallCounts() AICallCounts
+}
+
 // ExtractionFailure keeps a source candidate out of the accepted and review
 // buckets together with the final recovery stage and concrete reasons.
 type ExtractionFailure struct {

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -34,6 +35,8 @@ type OpenAIExtractor struct {
 	textModel   string
 	visionModel string
 	maxAttempts int
+	counts      AICallCounts
+	countsMu    sync.RWMutex
 }
 
 func NewOpenAIExtractor(httpClient *http.Client, apiURL, apiKey, textModel, visionModel string, maxAttempts int) *OpenAIExtractor {
@@ -64,7 +67,7 @@ func (e *OpenAIExtractor) Extract(ctx context.Context, request ExtractRequest) (
 	}
 
 	for attempt := 0; attempt < e.maxAttempts; attempt++ {
-		response, err := e.doRequest(ctx, body)
+		response, err := e.doRequest(ctx, body, request.Mode)
 		if err != nil {
 			return nil, err
 		}
@@ -86,7 +89,7 @@ func (e *OpenAIExtractor) Extract(ctx context.Context, request ExtractRequest) (
 	return nil, fmt.Errorf("Responses API attempts exhausted")
 }
 
-func (e *OpenAIExtractor) doRequest(ctx context.Context, body []byte) (*http.Response, error) {
+func (e *OpenAIExtractor) doRequest(ctx context.Context, body []byte, mode string) (*http.Response, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, e.apiURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create Responses request: %w", err)
@@ -94,11 +97,34 @@ func (e *OpenAIExtractor) doRequest(ctx context.Context, body []byte) (*http.Res
 	request.Header.Set("Authorization", "Bearer "+e.apiKey)
 	request.Header.Set("Content-Type", "application/json")
 
+	e.recordAttempt(mode)
 	response, err := e.httpClient.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("send Responses request: %w", err)
 	}
 	return response, nil
+}
+
+// CallCounts returns a concurrency-safe snapshot of every HTTP request attempt
+// made by this extractor, grouped by extraction mode.
+func (e *OpenAIExtractor) CallCounts() AICallCounts {
+	e.countsMu.RLock()
+	defer e.countsMu.RUnlock()
+	return e.counts
+}
+
+func (e *OpenAIExtractor) recordAttempt(mode string) {
+	e.countsMu.Lock()
+	defer e.countsMu.Unlock()
+	e.counts.APICalls++
+	switch mode {
+	case "recover":
+		e.counts.ImageCalls++
+	case "reconcile":
+		e.counts.ReconciliationCalls++
+	default:
+		e.counts.TextCalls++
+	}
 }
 
 func (e *OpenAIExtractor) requestPayload(request ExtractRequest) (map[string]any, error) {

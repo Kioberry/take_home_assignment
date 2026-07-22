@@ -27,20 +27,33 @@ var requiredCrossPageSpans = map[string][]int{
 // RunExtraction batches OCR extraction, deduplicates overlapping results, and
 // applies at most one image recovery plus one reconciliation request per
 // invalid candidate. It never makes recovery calls for already-valid records.
-func RunExtraction(ctx context.Context, ai AIExtractor, pages []Page, ocr []OCRPage, cfg Config) ExtractionResult {
-	result := ExtractionResult{
+func RunExtraction(ctx context.Context, ai AIExtractor, pages []Page, ocr []OCRPage, cfg Config) (result ExtractionResult) {
+	result = ExtractionResult{
 		Accepted:           make([]NormalizedCandidate, 0),
 		Review:             make([]NormalizedCandidate, 0),
 		Failed:             make([]ExtractionFailure, 0),
 		CompletenessIssues: make([]ValidationIssue, 0),
 	}
+	metrics, hasMetrics := ai.(AICallMetrics)
+	var startingCalls AICallCounts
+	if hasMetrics {
+		startingCalls = metrics.CallCounts()
+		defer func() {
+			applyActualAICallCounts(&result, startingCalls, metrics.CallCounts())
+		}()
+	}
 	if ai == nil {
 		result.CompletenessIssues = append(result.CompletenessIssues, pipelineIssue("nil_ai_extractor", "AI extractor is required", false))
-		return result
+		return
+	}
+	resolvedConfig, configIssues := resolvePipelineConfig(cfg)
+	if len(configIssues) > 0 {
+		result.CompletenessIssues = append(result.CompletenessIssues, configIssues...)
+		return
 	}
 
 	pageIndex := pageByNumber(pages)
-	batches := extractionBatches(pages, ocr, cfg)
+	batches := extractionBatches(pages, ocr, resolvedConfig)
 	rawBatches := make([][]RawCandidate, 0, len(batches))
 	for _, batch := range batches {
 		candidates, err := ai.Extract(ctx, ExtractRequest{OCR: batch.ocr, Mode: "extract"})
@@ -61,7 +74,7 @@ func RunExtraction(ctx context.Context, ai AIExtractor, pages []Page, ocr []OCRP
 			continue
 		}
 
-		final, failure, calls := recoverCandidate(ctx, ai, candidate, evaluation.issues, pageIndex, ocr, cfg)
+		final, failure, calls := recoverCandidate(ctx, ai, candidate, evaluation.issues, pageIndex, ocr, resolvedConfig)
 		result.ImageCalls += calls.image
 		result.ReconciliationCalls += calls.reconciliation
 		result.APICalls += calls.image + calls.reconciliation
@@ -72,10 +85,10 @@ func RunExtraction(ctx context.Context, ai AIExtractor, pages []Page, ocr []OCRP
 		addCandidateToBucket(&result, final)
 	}
 
-	if len(cfg.SelectedPages) == 0 {
-		result.CompletenessIssues = append(result.CompletenessIssues, completenessIssues(pages, result, cfg)...)
+	if len(resolvedConfig.SelectedPages) == 0 {
+		result.CompletenessIssues = append(result.CompletenessIssues, completenessIssues(pages, result, resolvedConfig)...)
 	}
-	return result
+	return
 }
 
 type recoveryCalls struct {
@@ -179,13 +192,7 @@ func extractionBatches(pages []Page, ocr []OCRPage, cfg Config) []extractionBatc
 	sortedPages := append([]Page(nil), pages...)
 	sort.Slice(sortedPages, func(i, j int) bool { return sortedPages[i].Number < sortedPages[j].Number })
 	batchSize := cfg.BatchSize
-	if batchSize < 1 {
-		batchSize = DefaultConfig().BatchSize
-	}
 	overlap := cfg.Overlap
-	if overlap < 0 || overlap >= batchSize {
-		overlap = DefaultConfig().Overlap
-	}
 	step := batchSize - overlap
 	ocrIndex := make(map[int]OCRPage, len(ocr))
 	for _, page := range ocr {
@@ -360,6 +367,43 @@ func reconciliationLimit(cfg Config) int {
 		return 1
 	}
 	return 0
+}
+
+func resolvePipelineConfig(cfg Config) (Config, []ValidationIssue) {
+	defaults := DefaultConfig()
+	issues := make([]ValidationIssue, 0)
+	defaultValue := func(field string, value *int, fallback int) {
+		switch {
+		case *value == 0:
+			*value = fallback
+		case *value < 0:
+			issues = append(issues, pipelineIssue("invalid_config", fmt.Sprintf("%s must not be negative", field), false))
+		}
+	}
+	defaultValue("batch_size", &cfg.BatchSize, defaults.BatchSize)
+	defaultValue("overlap", &cfg.Overlap, defaults.Overlap)
+	defaultValue("max_semantic_retries", &cfg.MaxSemanticRetries, defaults.MaxSemanticRetries)
+	defaultValue("max_reconciliation_requests", &cfg.MaxReconciliationRequests, defaults.MaxReconciliationRequests)
+	defaultValue("expected_pages", &cfg.ExpectedPages, defaults.ExpectedPages)
+	defaultValue("expected_items", &cfg.ExpectedItems, defaults.ExpectedItems)
+	if cfg.BatchSize > 0 && cfg.Overlap >= cfg.BatchSize {
+		issues = append(issues, pipelineIssue("invalid_config", "overlap must be smaller than batch_size", false))
+	}
+	return cfg, issues
+}
+
+func applyActualAICallCounts(result *ExtractionResult, before, after AICallCounts) {
+	result.TextCalls = nonNegativeDelta(after.TextCalls, before.TextCalls)
+	result.ImageCalls = nonNegativeDelta(after.ImageCalls, before.ImageCalls)
+	result.ReconciliationCalls = nonNegativeDelta(after.ReconciliationCalls, before.ReconciliationCalls)
+	result.APICalls = nonNegativeDelta(after.APICalls, before.APICalls)
+}
+
+func nonNegativeDelta(after, before int) int {
+	if after <= before {
+		return 0
+	}
+	return after - before
 }
 
 func pipelineIssue(code, message string, recoverable bool) ValidationIssue {

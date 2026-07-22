@@ -239,6 +239,43 @@ func TestOpenAIExtractorRetriesRequestTimeoutAndServerError(t *testing.T) {
 	}
 }
 
+func TestOpenAIExtractorCallCountsIncludeEveryRetryAttempt(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		mode   string
+		want   AICallCounts
+	}{
+		{name: "text rate limit", status: http.StatusTooManyRequests, mode: "extract", want: AICallCounts{TextCalls: 2, APICalls: 2}},
+		{name: "image timeout", status: http.StatusRequestTimeout, mode: "recover", want: AICallCounts{ImageCalls: 2, APICalls: 2}},
+		{name: "reconciliation server error", status: http.StatusBadGateway, mode: "reconcile", want: AICallCounts{ReconciliationCalls: 2, APICalls: 2}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			attempts := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempts++
+				if attempts == 1 {
+					http.Error(w, http.StatusText(test.status), test.status)
+					return
+				}
+				writeResponse(t, w, successfulResponse(candidateJSON(t)))
+			}))
+			defer server.Close()
+
+			extractor := NewOpenAIExtractor(server.Client(), server.URL, "test-key", "text-model", "vision-model", 2)
+			_, err := extractor.Extract(context.Background(), ExtractRequest{OCR: []OCRPage{{Number: 1, Text: "item"}}, Mode: test.mode})
+			if err != nil {
+				t.Fatalf("Extract: %v", err)
+			}
+			if got := extractor.CallCounts(); got != test.want {
+				t.Fatalf("CallCounts() = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestOpenAIExtractorRejectsNullArrays(t *testing.T) {
 	t.Run("root candidates", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
