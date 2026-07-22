@@ -424,6 +424,20 @@ func TestRunReportsExtractionFailureOnceAfterDatabasePhase(t *testing.T) {
 	}
 }
 
+func TestRunRequiresInjectedDatabaseDependencies(t *testing.T) {
+	cfg := testConfig(t)
+	deps := testDependencies(t, testExtractionResult(t, "Injected Item"))
+	deps.Connect = nil
+	deps.ApplySchema = func(context.Context, *pgxpool.Pool) error { return nil }
+	deps.EnsureEmptyCatalog = func(context.Context, *pgxpool.Pool) error { return nil }
+	deps.Persist = func(context.Context, *pgxpool.Pool, NormalizedCandidate) error { return nil }
+
+	err := run(context.Background(), cfg, deps)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "connect dependency") {
+		t.Fatalf("run error = %v, want missing injected connect dependency", err)
+	}
+}
+
 func TestRunReturnsNonzeroForCandidateAndCompletenessFailures(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.DryRun = true

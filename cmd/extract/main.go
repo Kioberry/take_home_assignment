@@ -125,7 +125,12 @@ func parseConfig(args []string, getenv func(string) string) (Config, error) {
 }
 
 func run(ctx context.Context, cfg Config, deps Dependencies) error {
-	deps = withDefaultDependencies(deps)
+	if deps.Validate == nil {
+		return errors.New("validate dependency is required")
+	}
+	if deps.OpenArtifacts == nil {
+		return errors.New("artifact dependency is required")
+	}
 	if err := deps.Validate(ctx, cfg); err != nil {
 		return safeError(err, cfg.APIKey)
 	}
@@ -143,6 +148,9 @@ func run(ctx context.Context, cfg Config, deps Dependencies) error {
 			return safeError(err, cfg.APIKey)
 		}
 	} else {
+		if deps.Render == nil || deps.OCR == nil || deps.Extract == nil {
+			return errors.New("render, OCR, and extraction dependencies are required")
+		}
 		pages, err = deps.Render(ctx, cfg, filepath.Join(store.Root(), "pages"))
 		if err != nil {
 			return safeError(fmt.Errorf("render pages: %w", err), cfg.APIKey)
@@ -162,6 +170,12 @@ func run(ctx context.Context, cfg Config, deps Dependencies) error {
 	}
 	if cfg.DryRun {
 		return runResultError(report)
+	}
+	if deps.Connect == nil {
+		return errors.New("connect dependency is required")
+	}
+	if deps.ApplySchema == nil || deps.EnsureEmptyCatalog == nil || deps.Persist == nil {
+		return errors.New("schema, catalog guard, and persistence dependencies are required")
 	}
 
 	pool, err := deps.Connect(ctx)
@@ -235,38 +249,6 @@ func defaultDependencies() Dependencies {
 			return err
 		},
 	}
-}
-
-func withDefaultDependencies(deps Dependencies) Dependencies {
-	defaults := defaultDependencies()
-	if deps.Validate == nil {
-		deps.Validate = defaults.Validate
-	}
-	if deps.OpenArtifacts == nil {
-		deps.OpenArtifacts = defaults.OpenArtifacts
-	}
-	if deps.Render == nil {
-		deps.Render = defaults.Render
-	}
-	if deps.OCR == nil {
-		deps.OCR = defaults.OCR
-	}
-	if deps.Extract == nil {
-		deps.Extract = defaults.Extract
-	}
-	if deps.Connect == nil {
-		deps.Connect = defaults.Connect
-	}
-	if deps.ApplySchema == nil {
-		deps.ApplySchema = defaults.ApplySchema
-	}
-	if deps.EnsureEmptyCatalog == nil {
-		deps.EnsureEmptyCatalog = defaults.EnsureEmptyCatalog
-	}
-	if deps.Persist == nil {
-		deps.Persist = defaults.Persist
-	}
-	return deps
 }
 
 func runResultError(report RunReport) error {
