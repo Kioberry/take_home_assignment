@@ -245,7 +245,11 @@ func parseResponse(body io.Reader) ([]RawCandidate, error) {
 			} `json:"content"`
 		} `json:"output"`
 	}
-	if err := json.NewDecoder(io.LimitReader(body, 10<<20)).Decode(&response); err != nil {
+	decoder := json.NewDecoder(io.LimitReader(body, 10<<20))
+	if err := decoder.Decode(&response); err != nil {
+		return nil, fmt.Errorf("decode Responses response: %w", err)
+	}
+	if err := requireEOF(decoder); err != nil {
 		return nil, fmt.Errorf("decode Responses response: %w", err)
 	}
 
@@ -267,19 +271,135 @@ func parseResponse(body io.Reader) ([]RawCandidate, error) {
 		return nil, fmt.Errorf("Responses API response has no output_text")
 	}
 
-	decoder := json.NewDecoder(strings.NewReader(outputText))
-	decoder.DisallowUnknownFields()
-	var result struct {
-		Candidates []RawCandidate `json:"candidates"`
-	}
-	if err := decoder.Decode(&result); err != nil {
+	return decodeStructuredCandidates([]byte(outputText))
+}
+
+func decodeStructuredCandidates(data []byte) ([]RawCandidate, error) {
+	root, err := decodeObject(data)
+	if err != nil {
 		return nil, fmt.Errorf("decode structured output: %w", err)
 	}
-	if decoder.More() {
-		return nil, fmt.Errorf("decode structured output: trailing JSON data")
+	for field := range root {
+		if field != "candidates" {
+			return nil, fmt.Errorf("decode structured output: unknown field %q", field)
+		}
 	}
-	return result.Candidates, nil
+	rawCandidates, ok := root["candidates"]
+	if !ok {
+		return nil, fmt.Errorf("decode structured output: missing required candidates")
+	}
+
+	var candidatesJSON []json.RawMessage
+	if err := decodeJSON(rawCandidates, &candidatesJSON); err != nil {
+		return nil, fmt.Errorf("decode structured output candidates: %w", err)
+	}
+	candidates := make([]RawCandidate, 0, len(candidatesJSON))
+	for _, rawCandidate := range candidatesJSON {
+		candidate, err := decodeCandidate(rawCandidate)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, candidate)
+	}
+	return candidates, nil
 }
+
+func decodeCandidate(data json.RawMessage) (RawCandidate, error) {
+	fields, err := decodeObject(data)
+	if err != nil {
+		return RawCandidate{}, fmt.Errorf("decode candidate: %w", err)
+	}
+	if err := requireFields(fields, "candidate", rawCandidateFields...); err != nil {
+		return RawCandidate{}, err
+	}
+	if err := requireArrayObjectFields(fields["effects"], "effect", rawEffectFields...); err != nil {
+		return RawCandidate{}, err
+	}
+	if err := requireArrayObjectFields(fields["limitations"], "limitation", rawLimitationFields...); err != nil {
+		return RawCandidate{}, err
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var candidate RawCandidate
+	if err := decoder.Decode(&candidate); err != nil {
+		return RawCandidate{}, fmt.Errorf("decode structured output: %w", err)
+	}
+	if err := requireEOF(decoder); err != nil {
+		return RawCandidate{}, fmt.Errorf("decode structured output: %w", err)
+	}
+	return candidate, nil
+}
+
+func decodeObject(data []byte) (map[string]json.RawMessage, error) {
+	var fields map[string]json.RawMessage
+	if err := decodeJSON(data, &fields); err != nil {
+		return nil, err
+	}
+	if fields == nil {
+		return nil, fmt.Errorf("expected object")
+	}
+	return fields, nil
+}
+
+func requireArrayObjectFields(data json.RawMessage, kind string, required ...string) error {
+	var objects []json.RawMessage
+	if err := decodeJSON(data, &objects); err != nil {
+		return fmt.Errorf("decode %s array: %w", kind, err)
+	}
+	if objects == nil {
+		return fmt.Errorf("%s array must not be null", kind)
+	}
+	for _, object := range objects {
+		fields, err := decodeObject(object)
+		if err != nil {
+			return fmt.Errorf("decode %s: %w", kind, err)
+		}
+		if err := requireFields(fields, kind, required...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func requireFields(fields map[string]json.RawMessage, kind string, required ...string) error {
+	for _, field := range required {
+		if _, ok := fields[field]; !ok {
+			return fmt.Errorf("missing required %s.%s", kind, field)
+		}
+	}
+	return nil
+}
+
+func decodeJSON(data []byte, value any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(value); err != nil {
+		return err
+	}
+	return requireEOF(decoder)
+}
+
+func requireEOF(decoder *json.Decoder) error {
+	var extra json.RawMessage
+	err := decoder.Decode(&extra)
+	if err == io.EOF {
+		return nil
+	}
+	if err == nil {
+		return fmt.Errorf("trailing JSON data")
+	}
+	return fmt.Errorf("trailing JSON data: %w", err)
+}
+
+var rawCandidateFields = []string{
+	"name", "source_pages", "source_item_type_raw", "source_item_subtype_raw", "rarity_raw",
+	"usage_mode_raw", "wear_slot_raw", "requires_attunement", "attunement_requirement",
+	"raw_description", "effects", "limitations", "confidence", "review_reasons", "continuation",
+}
+
+var rawEffectFields = []string{"category_raw", "description"}
+
+var rawLimitationFields = []string{"effect_index", "description"}
 
 func isRetryableStatus(status int) bool {
 	return status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || status >= http.StatusInternalServerError

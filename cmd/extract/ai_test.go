@@ -147,6 +147,98 @@ func TestOpenAIExtractorRejectsUnknownCandidateFields(t *testing.T) {
 	}
 }
 
+func TestOpenAIExtractorRejectsMissingRequiredFields(t *testing.T) {
+	tests := []struct {
+		name      string
+		candidate func() map[string]any
+		want      string
+	}{
+		{
+			name: "candidate field",
+			candidate: func() map[string]any {
+				return map[string]any{"name": "Arcane Compass"}
+			},
+			want: "candidate.source_pages",
+		},
+		{
+			name: "effect field",
+			candidate: func() map[string]any {
+				candidate := candidateJSON(t)
+				candidate["effects"] = []any{map[string]any{"description": "Points north."}}
+				return candidate
+			},
+			want: "effect.category_raw",
+		},
+		{
+			name: "limitation field",
+			candidate: func() map[string]any {
+				candidate := candidateJSON(t)
+				candidate["limitations"] = []any{map[string]any{"effect_index": nil}}
+				return candidate
+			},
+			want: "limitation.description",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				writeResponse(t, w, successfulResponse(test.candidate()))
+			}))
+			defer server.Close()
+
+			extractor := NewOpenAIExtractor(server.Client(), server.URL, "test-key", "text-model", "vision-model", 1)
+			_, err := extractor.Extract(context.Background(), ExtractRequest{OCR: []OCRPage{{Number: 1, Text: "item"}}})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want missing %s", err, test.want)
+			}
+		})
+	}
+}
+
+func TestOpenAIExtractorRejectsConcatenatedResponsesJSON(t *testing.T) {
+	response := mustJSON(successfulResponse(candidateJSON(t)))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := w.Write([]byte(response + response)); err != nil {
+			t.Fatalf("write concatenated response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	extractor := NewOpenAIExtractor(server.Client(), server.URL, "test-key", "text-model", "vision-model", 1)
+	_, err := extractor.Extract(context.Background(), ExtractRequest{OCR: []OCRPage{{Number: 1, Text: "item"}}})
+	if err == nil || !strings.Contains(err.Error(), "trailing JSON") {
+		t.Fatalf("error = %v, want trailing JSON error", err)
+	}
+}
+
+func TestOpenAIExtractorRetriesRequestTimeoutAndServerError(t *testing.T) {
+	for _, status := range []int{http.StatusRequestTimeout, http.StatusBadGateway} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if calls == 1 {
+					http.Error(w, http.StatusText(status), status)
+					return
+				}
+				writeResponse(t, w, successfulResponse(candidateJSON(t)))
+			}))
+			defer server.Close()
+
+			extractor := NewOpenAIExtractor(server.Client(), server.URL, "test-key", "text-model", "vision-model", 2)
+			candidates, err := extractor.Extract(context.Background(), ExtractRequest{OCR: []OCRPage{{Number: 1, Text: "item"}}})
+			if err != nil {
+				t.Fatalf("Extract after HTTP %d: %v", status, err)
+			}
+			if calls != 2 || len(candidates) != 1 {
+				t.Fatalf("calls=%d candidates=%#v, want 2 calls and one candidate", calls, candidates)
+			}
+		})
+	}
+}
+
 func assertResponsesRequest(t *testing.T, r *http.Request, wantModel string, wantImage bool) {
 	t.Helper()
 	if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" {
