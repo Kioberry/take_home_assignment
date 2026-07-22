@@ -6,6 +6,9 @@
 -- Then run `sqlc generate` (from this directory) to produce typed Go in
 -- ../generated. See ../../stormland/query for a worked example.
 
+-- name: CountMagicItems :one
+select count(*) from magic_item;
+
 -- name: InsertMagicItem :one
 insert into magic_item (
   name, source_item_type, source_item_subtype, rarity, usage_mode, wear_slot,

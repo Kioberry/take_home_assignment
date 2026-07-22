@@ -11,6 +11,25 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countMagicItems = `-- name: CountMagicItems :one
+
+select count(*) from magic_item
+`
+
+// Add your named queries here, e.g.:
+//
+//	-- name: InsertItem :one
+//	insert into item (name, rarity) values ($1, $2) returning *;
+//
+// Then run `sqlc generate` (from this directory) to produce typed Go in
+// ../generated. See ../../stormland/query for a worked example.
+func (q *Queries) CountMagicItems(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countMagicItems)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const effectsForMagicItem = `-- name: EffectsForMagicItem :many
 select id, category, description
 from effect
@@ -83,7 +102,6 @@ func (q *Queries) InsertLimitation(ctx context.Context, arg InsertLimitationPara
 }
 
 const insertMagicItem = `-- name: InsertMagicItem :one
-
 insert into magic_item (
   name, source_item_type, source_item_subtype, rarity, usage_mode, wear_slot,
   requires_attunement, attunement_requirement, raw_description, needs_review
@@ -104,13 +122,6 @@ type InsertMagicItemParams struct {
 	NeedsReview           bool
 }
 
-// Add your named queries here, e.g.:
-//
-//	-- name: InsertItem :one
-//	insert into item (name, rarity) values ($1, $2) returning *;
-//
-// Then run `sqlc generate` (from this directory) to produce typed Go in
-// ../generated. See ../../stormland/query for a worked example.
 func (q *Queries) InsertMagicItem(ctx context.Context, arg InsertMagicItemParams) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, insertMagicItem,
 		arg.Name,
