@@ -239,7 +239,7 @@ func TestOpenAIExtractorRetriesRequestTimeoutAndServerError(t *testing.T) {
 	}
 }
 
-func TestOpenAIExtractorCallCountsIncludeEveryRetryAttempt(t *testing.T) {
+func TestOpenAIExtractorExtractWithMetricsIncludesEveryRetryAttempt(t *testing.T) {
 	tests := []struct {
 		name   string
 		status int
@@ -265,12 +265,12 @@ func TestOpenAIExtractorCallCountsIncludeEveryRetryAttempt(t *testing.T) {
 			defer server.Close()
 
 			extractor := NewOpenAIExtractor(server.Client(), server.URL, "test-key", "text-model", "vision-model", 2)
-			_, err := extractor.Extract(context.Background(), ExtractRequest{OCR: []OCRPage{{Number: 1, Text: "item"}}, Mode: test.mode})
+			_, got, err := extractor.ExtractWithMetrics(context.Background(), ExtractRequest{OCR: []OCRPage{{Number: 1, Text: "item"}}, Mode: test.mode})
 			if err != nil {
-				t.Fatalf("Extract: %v", err)
+				t.Fatalf("ExtractWithMetrics: %v", err)
 			}
-			if got := extractor.CallCounts(); got != test.want {
-				t.Fatalf("CallCounts() = %#v, want %#v", got, test.want)
+			if got != test.want {
+				t.Fatalf("per-call metrics = %#v, want %#v", got, test.want)
 			}
 		})
 	}

@@ -27,38 +27,29 @@ var requiredCrossPageSpans = map[string][]int{
 // RunExtraction batches OCR extraction, deduplicates overlapping results, and
 // applies at most one image recovery plus one reconciliation request per
 // invalid candidate. It never makes recovery calls for already-valid records.
-func RunExtraction(ctx context.Context, ai AIExtractor, pages []Page, ocr []OCRPage, cfg Config) (result ExtractionResult) {
-	result = ExtractionResult{
+func RunExtraction(ctx context.Context, ai AIExtractor, pages []Page, ocr []OCRPage, cfg Config) ExtractionResult {
+	result := ExtractionResult{
 		Accepted:           make([]NormalizedCandidate, 0),
 		Review:             make([]NormalizedCandidate, 0),
 		Failed:             make([]ExtractionFailure, 0),
 		CompletenessIssues: make([]ValidationIssue, 0),
 	}
-	metrics, hasMetrics := ai.(AICallMetrics)
-	var startingCalls AICallCounts
-	if hasMetrics {
-		startingCalls = metrics.CallCounts()
-		defer func() {
-			applyActualAICallCounts(&result, startingCalls, metrics.CallCounts())
-		}()
-	}
 	if ai == nil {
 		result.CompletenessIssues = append(result.CompletenessIssues, pipelineIssue("nil_ai_extractor", "AI extractor is required", false))
-		return
+		return result
 	}
 	resolvedConfig, configIssues := resolvePipelineConfig(cfg)
 	if len(configIssues) > 0 {
 		result.CompletenessIssues = append(result.CompletenessIssues, configIssues...)
-		return
+		return result
 	}
 
 	pageIndex := pageByNumber(pages)
 	batches := extractionBatches(pages, ocr, resolvedConfig)
 	rawBatches := make([][]RawCandidate, 0, len(batches))
 	for _, batch := range batches {
-		candidates, err := ai.Extract(ctx, ExtractRequest{OCR: batch.ocr, Mode: "extract"})
-		result.TextCalls++
-		result.APICalls++
+		candidates, calls, err := extractCandidates(ctx, ai, ExtractRequest{OCR: batch.ocr, Mode: "extract"})
+		addAICallCounts(&result, calls)
 		if err != nil {
 			result.CompletenessIssues = append(result.CompletenessIssues, pipelineIssue("text_extraction_failed", fmt.Sprintf("text extraction for pages %s failed: %v", pageNumbers(batch.pages), err), false))
 			continue
@@ -75,9 +66,7 @@ func RunExtraction(ctx context.Context, ai AIExtractor, pages []Page, ocr []OCRP
 		}
 
 		final, failure, calls := recoverCandidate(ctx, ai, candidate, evaluation.issues, pageIndex, ocr, resolvedConfig)
-		result.ImageCalls += calls.image
-		result.ReconciliationCalls += calls.reconciliation
-		result.APICalls += calls.image + calls.reconciliation
+		addAICallCounts(&result, calls)
 		if failure != nil {
 			result.Failed = append(result.Failed, *failure)
 			continue
@@ -88,30 +77,42 @@ func RunExtraction(ctx context.Context, ai AIExtractor, pages []Page, ocr []OCRP
 	if len(resolvedConfig.SelectedPages) == 0 {
 		result.CompletenessIssues = append(result.CompletenessIssues, completenessIssues(pages, result, resolvedConfig)...)
 	}
-	return
+	return result
 }
 
-type recoveryCalls struct {
-	image          int
-	reconciliation int
+func extractCandidates(ctx context.Context, ai AIExtractor, request ExtractRequest) ([]RawCandidate, AICallCounts, error) {
+	if metered, found := ai.(AIExtractorWithMetrics); found {
+		return metered.ExtractWithMetrics(ctx, request)
+	}
+	candidates, err := ai.Extract(ctx, request)
+	counts := AICallCounts{}
+	recordAIAttempt(&counts, request.Mode)
+	return candidates, counts, err
 }
 
-func recoverCandidate(ctx context.Context, ai AIExtractor, original RawCandidate, initialIssues []ValidationIssue, pageIndex map[int]Page, ocr []OCRPage, cfg Config) (NormalizedCandidate, *ExtractionFailure, recoveryCalls) {
-	calls := recoveryCalls{}
+func addAICallCounts(result *ExtractionResult, calls AICallCounts) {
+	result.TextCalls += calls.TextCalls
+	result.ImageCalls += calls.ImageCalls
+	result.ReconciliationCalls += calls.ReconciliationCalls
+	result.APICalls += calls.APICalls
+}
+
+func recoverCandidate(ctx context.Context, ai AIExtractor, original RawCandidate, initialIssues []ValidationIssue, pageIndex map[int]Page, ocr []OCRPage, cfg Config) (NormalizedCandidate, *ExtractionFailure, AICallCounts) {
+	calls := AICallCounts{}
 	selectedImages := recoveryPages(original.SourcePages, pageIndex)
 	selectedOCR := ocrForPages(ocr, selectedImages)
 	current := original
 	issues := append([]ValidationIssue(nil), initialIssues...)
 
 	if semanticRetryLimit(cfg) > 0 {
-		response, err := ai.Extract(ctx, ExtractRequest{
+		response, requestCalls, err := extractCandidates(ctx, ai, ExtractRequest{
 			OCR:    selectedOCR,
 			Images: selectedImages,
 			Prior:  []RawCandidate{current},
 			Issues: issues,
 			Mode:   "recover",
 		})
-		calls.image++
+		addAICallCountsToCounts(&calls, requestCalls)
 		if err != nil {
 			return NormalizedCandidate{}, recoveryFailure(current, "image", issues, err), calls
 		}
@@ -130,14 +131,14 @@ func recoverCandidate(ctx context.Context, ai AIExtractor, original RawCandidate
 	}
 
 	if reconciliationLimit(cfg) > 0 {
-		response, err := ai.Extract(ctx, ExtractRequest{
+		response, requestCalls, err := extractCandidates(ctx, ai, ExtractRequest{
 			OCR:    selectedOCR,
 			Images: selectedImages,
 			Prior:  []RawCandidate{current},
 			Issues: issues,
 			Mode:   "reconcile",
 		})
-		calls.reconciliation++
+		addAICallCountsToCounts(&calls, requestCalls)
 		if err != nil {
 			return NormalizedCandidate{}, recoveryFailure(current, "reconciliation", issues, err), calls
 		}
@@ -392,18 +393,11 @@ func resolvePipelineConfig(cfg Config) (Config, []ValidationIssue) {
 	return cfg, issues
 }
 
-func applyActualAICallCounts(result *ExtractionResult, before, after AICallCounts) {
-	result.TextCalls = nonNegativeDelta(after.TextCalls, before.TextCalls)
-	result.ImageCalls = nonNegativeDelta(after.ImageCalls, before.ImageCalls)
-	result.ReconciliationCalls = nonNegativeDelta(after.ReconciliationCalls, before.ReconciliationCalls)
-	result.APICalls = nonNegativeDelta(after.APICalls, before.APICalls)
-}
-
-func nonNegativeDelta(after, before int) int {
-	if after <= before {
-		return 0
-	}
-	return after - before
+func addAICallCountsToCounts(total *AICallCounts, calls AICallCounts) {
+	total.TextCalls += calls.TextCalls
+	total.ImageCalls += calls.ImageCalls
+	total.ReconciliationCalls += calls.ReconciliationCalls
+	total.APICalls += calls.APICalls
 }
 
 func pipelineIssue(code, message string, recoverable bool) ValidationIssue {

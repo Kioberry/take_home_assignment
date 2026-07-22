@@ -1,6 +1,10 @@
 package main
 
-import "oddities/database/generated"
+import (
+	"context"
+
+	"oddities/database/generated"
+)
 
 type Config struct {
 	PDFPath                   string `json:"pdf_path"`
@@ -105,10 +109,11 @@ type AICallCounts struct {
 	APICalls            int `json:"api_calls"`
 }
 
-// AICallMetrics is an optional snapshot interface. AIExtractor remains the
-// stable extraction contract for simple fakes and alternative providers.
-type AICallMetrics interface {
-	CallCounts() AICallCounts
+// AIExtractorWithMetrics is an optional per-call metrics extension.
+// AIExtractor remains the stable extraction contract for simple fakes and
+// alternative providers.
+type AIExtractorWithMetrics interface {
+	ExtractWithMetrics(context.Context, ExtractRequest) ([]RawCandidate, AICallCounts, error)
 }
 
 // ExtractionFailure keeps a source candidate out of the accepted and review

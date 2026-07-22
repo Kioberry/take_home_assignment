@@ -256,13 +256,48 @@ func TestRunExtractionReportsFullRunCompletenessFailures(t *testing.T) {
 func TestRunExtractionUsesProviderAttemptMetricsWhenAvailable(t *testing.T) {
 	provider := &meteredScriptedAI{
 		scriptedAI: scriptedAI{t: t, responses: [][]RawCandidate{{pipelineCandidate("Retried", 1)}}},
-		increments: []AICallCounts{{TextCalls: 2, APICalls: 2}},
+		metrics:    []AICallCounts{{TextCalls: 2, APICalls: 2}},
 	}
 
 	result := RunExtraction(context.Background(), provider, pipelinePages(1, 1), pipelineOCR(1, 1), Config{SelectedPages: []int{1}})
 
 	if result.TextCalls != 2 || result.ImageCalls != 0 || result.ReconciliationCalls != 0 || result.APICalls != 2 {
 		t.Fatalf("provider attempt accounting = %#v, want two actual text attempts", result)
+	}
+}
+
+func TestRunExtractionPerCallMetricsDoNotCrossContaminateConcurrentRuns(t *testing.T) {
+	provider := &concurrentMetricsAI{
+		entered: make(chan struct{}, 2),
+		release: make(chan struct{}),
+		responses: map[string]RawCandidate{
+			"first":  pipelineCandidate("First", 1),
+			"second": pipelineCandidate("Second", 1),
+		},
+		metrics: map[string]AICallCounts{
+			"first":  {TextCalls: 2, APICalls: 2},
+			"second": {TextCalls: 3, APICalls: 3},
+		},
+	}
+	firstResult := make(chan ExtractionResult, 1)
+	secondResult := make(chan ExtractionResult, 1)
+	go func() {
+		firstResult <- RunExtraction(context.Background(), provider, pipelinePages(1, 1), []OCRPage{{Number: 1, Text: "first"}}, Config{SelectedPages: []int{1}})
+	}()
+	go func() {
+		secondResult <- RunExtraction(context.Background(), provider, pipelinePages(1, 1), []OCRPage{{Number: 1, Text: "second"}}, Config{SelectedPages: []int{1}})
+	}()
+	<-provider.entered
+	<-provider.entered
+	close(provider.release)
+
+	first := <-firstResult
+	second := <-secondResult
+	if first.TextCalls != 2 || first.APICalls != 2 {
+		t.Fatalf("first run counts = %#v, want its two attempts only", first)
+	}
+	if second.TextCalls != 3 || second.APICalls != 3 {
+		t.Fatalf("second run counts = %#v, want its three attempts only", second)
 	}
 }
 
@@ -326,23 +361,41 @@ func hasIssueCode(issues []ValidationIssue, code string) bool {
 
 type meteredScriptedAI struct {
 	scriptedAI
-	increments []AICallCounts
-	counts     AICallCounts
+	metrics []AICallCounts
 }
 
-func (ai *meteredScriptedAI) Extract(ctx context.Context, request ExtractRequest) ([]RawCandidate, error) {
+func (ai *meteredScriptedAI) ExtractWithMetrics(ctx context.Context, request ExtractRequest) ([]RawCandidate, AICallCounts, error) {
 	candidates, err := ai.scriptedAI.Extract(ctx, request)
-	if len(ai.increments) > 0 {
-		increment := ai.increments[0]
-		ai.counts.TextCalls += increment.TextCalls
-		ai.counts.ImageCalls += increment.ImageCalls
-		ai.counts.ReconciliationCalls += increment.ReconciliationCalls
-		ai.counts.APICalls += increment.APICalls
-		ai.increments = ai.increments[1:]
+	if len(ai.metrics) == 0 {
+		return candidates, AICallCounts{}, err
 	}
+	metrics := ai.metrics[0]
+	ai.metrics = ai.metrics[1:]
+	return candidates, metrics, err
+}
+
+type concurrentMetricsAI struct {
+	entered   chan struct{}
+	release   chan struct{}
+	responses map[string]RawCandidate
+	metrics   map[string]AICallCounts
+}
+
+func (ai *concurrentMetricsAI) Extract(ctx context.Context, request ExtractRequest) ([]RawCandidate, error) {
+	candidates, _, err := ai.ExtractWithMetrics(ctx, request)
 	return candidates, err
 }
 
-func (ai *meteredScriptedAI) CallCounts() AICallCounts {
-	return ai.counts
+func (ai *concurrentMetricsAI) ExtractWithMetrics(_ context.Context, request ExtractRequest) ([]RawCandidate, AICallCounts, error) {
+	if len(request.OCR) != 1 {
+		return nil, AICallCounts{}, fmt.Errorf("OCR pages = %d, want 1", len(request.OCR))
+	}
+	key := request.OCR[0].Text
+	ai.entered <- struct{}{}
+	<-ai.release
+	candidate, found := ai.responses[key]
+	if !found {
+		return nil, AICallCounts{}, fmt.Errorf("unexpected request %q", key)
+	}
+	return []RawCandidate{candidate}, ai.metrics[key], nil
 }

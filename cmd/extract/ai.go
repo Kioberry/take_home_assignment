@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -35,8 +34,6 @@ type OpenAIExtractor struct {
 	textModel   string
 	visionModel string
 	maxAttempts int
-	counts      AICallCounts
-	countsMu    sync.RWMutex
 }
 
 func NewOpenAIExtractor(httpClient *http.Client, apiURL, apiKey, textModel, visionModel string, maxAttempts int) *OpenAIExtractor {
@@ -57,39 +54,48 @@ func NewOpenAIExtractor(httpClient *http.Client, apiURL, apiKey, textModel, visi
 }
 
 func (e *OpenAIExtractor) Extract(ctx context.Context, request ExtractRequest) ([]RawCandidate, error) {
+	candidates, _, err := e.ExtractWithMetrics(ctx, request)
+	return candidates, err
+}
+
+// ExtractWithMetrics returns candidates and the HTTP request attempts made for
+// this invocation only. Retry attempts are included in the returned snapshot.
+func (e *OpenAIExtractor) ExtractWithMetrics(ctx context.Context, request ExtractRequest) ([]RawCandidate, AICallCounts, error) {
+	counts := AICallCounts{}
 	payload, err := e.requestPayload(request)
 	if err != nil {
-		return nil, err
+		return nil, counts, err
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("marshal Responses request: %w", err)
+		return nil, counts, fmt.Errorf("marshal Responses request: %w", err)
 	}
 
 	for attempt := 0; attempt < e.maxAttempts; attempt++ {
-		response, err := e.doRequest(ctx, body, request.Mode)
+		recordAIAttempt(&counts, request.Mode)
+		response, err := e.doRequest(ctx, body)
 		if err != nil {
-			return nil, err
+			return nil, counts, err
 		}
 		if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
 			candidates, err := parseResponse(response.Body)
 			response.Body.Close()
-			return candidates, err
+			return candidates, counts, err
 		}
 		status := response.StatusCode
 		response.Body.Close()
 		if !isRetryableStatus(status) || attempt == e.maxAttempts-1 {
-			return nil, fmt.Errorf("Responses API returned HTTP %d", status)
+			return nil, counts, fmt.Errorf("Responses API returned HTTP %d", status)
 		}
 		if err := waitForRetry(ctx, attempt); err != nil {
-			return nil, err
+			return nil, counts, err
 		}
 	}
 
-	return nil, fmt.Errorf("Responses API attempts exhausted")
+	return nil, counts, fmt.Errorf("Responses API attempts exhausted")
 }
 
-func (e *OpenAIExtractor) doRequest(ctx context.Context, body []byte, mode string) (*http.Response, error) {
+func (e *OpenAIExtractor) doRequest(ctx context.Context, body []byte) (*http.Response, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, e.apiURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create Responses request: %w", err)
@@ -97,7 +103,6 @@ func (e *OpenAIExtractor) doRequest(ctx context.Context, body []byte, mode strin
 	request.Header.Set("Authorization", "Bearer "+e.apiKey)
 	request.Header.Set("Content-Type", "application/json")
 
-	e.recordAttempt(mode)
 	response, err := e.httpClient.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("send Responses request: %w", err)
@@ -105,25 +110,15 @@ func (e *OpenAIExtractor) doRequest(ctx context.Context, body []byte, mode strin
 	return response, nil
 }
 
-// CallCounts returns a concurrency-safe snapshot of every HTTP request attempt
-// made by this extractor, grouped by extraction mode.
-func (e *OpenAIExtractor) CallCounts() AICallCounts {
-	e.countsMu.RLock()
-	defer e.countsMu.RUnlock()
-	return e.counts
-}
-
-func (e *OpenAIExtractor) recordAttempt(mode string) {
-	e.countsMu.Lock()
-	defer e.countsMu.Unlock()
-	e.counts.APICalls++
+func recordAIAttempt(counts *AICallCounts, mode string) {
+	counts.APICalls++
 	switch mode {
 	case "recover":
-		e.counts.ImageCalls++
+		counts.ImageCalls++
 	case "reconcile":
-		e.counts.ReconciliationCalls++
+		counts.ReconciliationCalls++
 	default:
-		e.counts.TextCalls++
+		counts.TextCalls++
 	}
 }
 
