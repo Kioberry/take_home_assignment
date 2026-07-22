@@ -276,6 +276,19 @@ func TestOpenAIExtractorExtractWithMetricsIncludesEveryRetryAttempt(t *testing.T
 	}
 }
 
+func TestOpenAIExtractorExtractWithMetricsDoesNotCountRequestConstructionFailure(t *testing.T) {
+	extractor := NewOpenAIExtractor(http.DefaultClient, "http://[::1", "test-key", "text-model", "vision-model", 2)
+
+	_, counts, err := extractor.ExtractWithMetrics(context.Background(), ExtractRequest{OCR: []OCRPage{{Number: 1, Text: "item"}}, Mode: "extract"})
+
+	if err == nil || !strings.Contains(err.Error(), "create Responses request") {
+		t.Fatalf("error = %v, want request construction failure", err)
+	}
+	if counts != (AICallCounts{}) {
+		t.Fatalf("metrics = %#v, want zero attempts before an HTTP request exists", counts)
+	}
+}
+
 func TestOpenAIExtractorRejectsNullArrays(t *testing.T) {
 	t.Run("root candidates", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

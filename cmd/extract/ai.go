@@ -72,8 +72,7 @@ func (e *OpenAIExtractor) ExtractWithMetrics(ctx context.Context, request Extrac
 	}
 
 	for attempt := 0; attempt < e.maxAttempts; attempt++ {
-		recordAIAttempt(&counts, request.Mode)
-		response, err := e.doRequest(ctx, body)
+		response, err := e.doRequest(ctx, body, request.Mode, &counts)
 		if err != nil {
 			return nil, counts, err
 		}
@@ -95,7 +94,7 @@ func (e *OpenAIExtractor) ExtractWithMetrics(ctx context.Context, request Extrac
 	return nil, counts, fmt.Errorf("Responses API attempts exhausted")
 }
 
-func (e *OpenAIExtractor) doRequest(ctx context.Context, body []byte) (*http.Response, error) {
+func (e *OpenAIExtractor) doRequest(ctx context.Context, body []byte, mode string, counts *AICallCounts) (*http.Response, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, e.apiURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create Responses request: %w", err)
@@ -103,6 +102,7 @@ func (e *OpenAIExtractor) doRequest(ctx context.Context, body []byte) (*http.Res
 	request.Header.Set("Authorization", "Bearer "+e.apiKey)
 	request.Header.Set("Content-Type", "application/json")
 
+	recordAIAttempt(counts, mode)
 	response, err := e.httpClient.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("send Responses request: %w", err)
