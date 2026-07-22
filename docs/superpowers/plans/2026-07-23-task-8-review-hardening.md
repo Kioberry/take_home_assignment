@@ -70,4 +70,3 @@
 - [ ] Run focused `cmd/extract` tests, full `cmd/extract` tests, `go vet ./...`, and `git diff --check`.
 - [ ] Append complete RED/GREEN commands, outcomes, changed behavior, SHA, and concerns to the Task 8 report.
 - [ ] Stage only the Task 8 hardening files and create exactly one commit with message `fix: harden CLI resume and failure reporting`.
-

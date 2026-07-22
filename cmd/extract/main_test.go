@@ -524,6 +524,44 @@ func TestResumeRejectsStaleReviewCandidateBeforeDatabaseWork(t *testing.T) {
 	}
 }
 
+func TestResumeRejectsOrphanReportFailureForAcceptedCandidateBeforeDatabaseWork(t *testing.T) {
+	cfg := testConfig(t)
+	result := testExtractionResult(t, "Accepted Item")
+	writeResumeArtifacts(t, cfg, result)
+	store, err := NewArtifactStore(cfg.RunRoot, cfg.RunID)
+	if err != nil {
+		t.Fatalf("NewArtifactStore: %v", err)
+	}
+	var report RunReport
+	if err := store.ReadJSON("report.json", &report); err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	key := CandidateKey(result.Accepted[0].Raw)
+	report.Failures = []RunFailure{
+		{CandidateName: result.Accepted[0].Raw.Name, CandidateKey: key, Stage: "validation"},
+		{CandidateName: result.Accepted[0].Raw.Name, CandidateKey: key, Stage: "validation"},
+	}
+	report.FailureCount = len(report.Failures)
+	if err := store.WriteJSON("report.json", report); err != nil {
+		t.Fatalf("write corrupt report: %v", err)
+	}
+	cfg.Resume = true
+	databaseCalls := 0
+	deps := testDependencies(t, ExtractionResult{})
+	deps.Connect = func(context.Context) (*pgxpool.Pool, error) {
+		databaseCalls++
+		return nil, errors.New("database must not be reached")
+	}
+
+	err = run(context.Background(), cfg, deps)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "report failure") {
+		t.Fatalf("resume integrity error = %v, want orphan/duplicate report failure rejection", err)
+	}
+	if databaseCalls != 0 {
+		t.Fatalf("database calls = %d, want none after incompatible report failures", databaseCalls)
+	}
+}
+
 func TestRunWritesTerminalReportForDatabaseLifecycleFailures(t *testing.T) {
 	for _, test := range []struct {
 		name  string

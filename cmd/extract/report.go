@@ -328,6 +328,8 @@ func validateResumeCandidateGraph(raw []RawCandidate, normalized []NormalizedCan
 			return fmt.Errorf("resume extraction failure candidate %q is not represented in raw candidates", key)
 		}
 	}
+	reportedExtractionStages := make(map[string]string, len(report.Failures))
+	reportedFailureKeys := make(map[string]struct{}, len(report.Failures))
 	for _, failure := range report.Failures {
 		if failure.CandidateKey == "" {
 			if isDatabaseLifecycleStage(failure.Stage) {
@@ -338,18 +340,19 @@ func validateResumeCandidateGraph(raw []RawCandidate, normalized []NormalizedCan
 		if _, ok := rawKeys[failure.CandidateKey]; !ok {
 			return fmt.Errorf("resume report failure candidate %q is not represented in raw candidates", failure.CandidateKey)
 		}
-	}
-	reportedExtractionStages := make(map[string]string, len(report.Failures))
-	for _, failure := range report.Failures {
+		if _, duplicate := reportedFailureKeys[failure.CandidateKey]; duplicate {
+			return fmt.Errorf("resume report failures contain duplicate candidate identity %q", failure.CandidateKey)
+		}
+		reportedFailureKeys[failure.CandidateKey] = struct{}{}
 		if failure.CandidateKey != "" && !isDatabaseLifecycleStage(failure.Stage) && failure.Stage != "persistence" {
 			reportedExtractionStages[failure.CandidateKey] = failure.Stage
 		}
 	}
+	if err := requireKeySetMatches(failureKeys, stringKeySet(reportedExtractionStages), "extraction failure artifact", "report extraction failure"); err != nil {
+		return fmt.Errorf("resume report failure identities are inconsistent: %w", err)
+	}
 	for key := range failureKeys {
-		stage, found := reportedExtractionStages[key]
-		if !found {
-			return fmt.Errorf("resume extraction failure candidate %q is missing from report failures", key)
-		}
+		stage := reportedExtractionStages[key]
 		for _, failure := range review.Failures {
 			if CandidateKey(failure.Candidate) == key && failure.Stage != stage {
 				return fmt.Errorf("resume extraction failure candidate %q has stage %q in report, want %q", key, stage, failure.Stage)
@@ -425,6 +428,14 @@ func requireKeySetSubset(subset, superset map[string]struct{}, subsetLabel, supe
 		}
 	}
 	return nil
+}
+
+func stringKeySet(values map[string]string) map[string]struct{} {
+	keys := make(map[string]struct{}, len(values))
+	for key := range values {
+		keys[key] = struct{}{}
+	}
+	return keys
 }
 
 func isDatabaseLifecycleStage(stage string) bool {
