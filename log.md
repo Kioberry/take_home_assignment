@@ -153,3 +153,10 @@ or Blocked.
 - Command: `go test ./cmd/extract -count=1 -skip 'TestArtifact|TestPersistCandidate|TestEnsureEmptyCatalog'`; followed by `go test ./cmd/verify ./db ./database/generated ./stormland/generated -count=1`; then `git diff --check`.
 - Result: Passed. The cmd/extract non-artifact/non-database test subset passed in 2.145 seconds. Packages without tests built successfully, and the whitespace check passed.
 - Scope: this confirms the provider contract, PDF/OCR command boundaries, merge/deduplication, normalization/validation, adaptive recovery, and dependency-injected CLI/report paths. It does not replace the blocked artifact or database integration gates.
+
+### 2026-07-23 — Claude provider migration and live-verification status
+
+- Local configuration: `.env` is Git-ignored and provides Anthropic model and credential configuration. The extractor's default provider was migrated from the OpenAI Responses API to the Anthropic Messages API with tool-use structured output.
+- Local verification: focused Claude-provider and `.env` tests, `go vet ./...`, `go test ./... -count=1`, and `git diff --check` passed on macOS with local PostgreSQL available.
+- Live verification: **Not verified / blocked.** Pages 7–9 dry-run attempts returned a model-not-found response for the configured model. The owner reported that usable paid API access for both providers is not currently available; do not make further provider calls until credentials, billing, and an available model are confirmed.
+- Evidence limit: no successful paid extraction, image-recovery request, full 39-page/80-record dry-run, or fresh-database persistence run has been performed. Local `tmp/extraction/` artifacts are non-authoritative failed-attempt evidence and are not committed.
