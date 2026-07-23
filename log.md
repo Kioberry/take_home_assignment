@@ -127,3 +127,23 @@ No command has been rerun in the current Task 9 verification cycle yet. Each
 subsequent entry will include the local timestamp, exact command, exit code,
 concise result, artifact run ID when applicable, and status of Passed, Failed,
 or Blocked.
+
+### 2026-07-23T16:57:38.1585665+08:00 — Static and unit verification attempt
+
+- Commands: semantic gofmt comparison against temporary copies of all 36 tracked
+  Go files; `go vet ./...`; `go test ./... -count=1`; and `git diff --check`.
+- Format result: Passed. The repository has `core.autocrlf=true`, so direct
+  `gofmt -d` reports CRLF-to-LF-only diffs for every Go file. Comparing the
+  normalized source with gofmt output found no semantic format changes.
+- Vet result: Passed when rerun outside the restricted sandbox; the initial
+  sandbox attempt could not access the local Go build cache.
+- Test result: Failed. Artifact replacement cannot rename an existing open
+  file on Windows (`Access is denied`), and Windows reports directory mode
+  `0777` rather than the Unix-only expectation `0755`. Database integration
+  tests also failed because PostgreSQL was not listening on localhost:5433.
+- Docker status: Blocked. `docker compose ps` could not reach the Docker Desktop
+  Linux engine named pipe, so PostgreSQL cannot be started until Docker Desktop
+  is running.
+- Next action: treat the artifact failures as a cross-platform defect requiring
+  a separate fix plan; do not run the paid PDF smoke test while the static/unit
+  gate is failed and Docker is unavailable.
