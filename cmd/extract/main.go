@@ -35,6 +35,9 @@ type Dependencies struct {
 }
 
 func main() {
+	if err := loadDotEnv(".env"); err != nil {
+		fatal("configuration: %v", err)
+	}
 	cfg, err := parseConfig(os.Args[1:], os.Getenv)
 	if err != nil {
 		fatal("configuration: %v", err)
@@ -51,17 +54,17 @@ func parseConfig(args []string, getenv func(string) string) (Config, error) {
 	cfg := DefaultConfig()
 	cfg.PDFPath = pdfPath
 	cfg.RunRoot = "tmp/extraction"
-	cfg.APIURL = "https://api.openai.com"
-	if value := strings.TrimSpace(getenv("OPENAI_API_URL")); value != "" {
+	cfg.APIURL = "https://api.anthropic.com"
+	if value := strings.TrimSpace(getenv("ANTHROPIC_API_URL")); value != "" {
 		cfg.APIURL = value
 	}
-	if value := strings.TrimSpace(getenv("OPENAI_TEXT_MODEL")); value != "" {
+	if value := strings.TrimSpace(getenv("ANTHROPIC_TEXT_MODEL")); value != "" {
 		cfg.TextModel = value
 	}
-	if value := strings.TrimSpace(getenv("OPENAI_VISION_MODEL")); value != "" {
+	if value := strings.TrimSpace(getenv("ANTHROPIC_VISION_MODEL")); value != "" {
 		cfg.VisionModel = value
 	}
-	cfg.APIKey = strings.TrimSpace(getenv("OPENAI_API_KEY"))
+	cfg.APIKey = strings.TrimSpace(getenv("ANTHROPIC_API_KEY"))
 
 	flags := flag.NewFlagSet("extract", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
@@ -76,7 +79,7 @@ func parseConfig(args []string, getenv func(string) string) (Config, error) {
 	flags.IntVar(&cfg.Overlap, "overlap", cfg.Overlap, "overlap between extraction batches")
 	flags.IntVar(&cfg.ExpectedPages, "expected-pages", cfg.ExpectedPages, "expected pages for a full run")
 	flags.IntVar(&cfg.ExpectedItems, "expected-items", cfg.ExpectedItems, "expected items for a full run")
-	flags.StringVar(&cfg.APIURL, "api-url", cfg.APIURL, "OpenAI-compatible API base URL")
+	flags.StringVar(&cfg.APIURL, "api-url", cfg.APIURL, "Anthropic API base URL")
 	flags.StringVar(&cfg.TextModel, "text-model", cfg.TextModel, "text extraction model")
 	flags.StringVar(&cfg.VisionModel, "vision-model", cfg.VisionModel, "vision recovery model")
 	flags.IntVar(&cfg.MaxTextAttempts, "max-text-attempts", cfg.MaxTextAttempts, "maximum API attempts per request")
@@ -107,7 +110,7 @@ func parseConfig(args []string, getenv func(string) string) (Config, error) {
 		cfg.SelectedPages = pages
 	}
 	if cfg.APIKey == "" {
-		return Config{}, errors.New("API key is required: set OPENAI_API_KEY in the environment")
+		return Config{}, errors.New("API key is required: set ANTHROPIC_API_KEY in the environment or .env")
 	}
 	if cfg.BatchSize < 1 {
 		return Config{}, fmt.Errorf("batch size must be at least 1, got %d", cfg.BatchSize)
@@ -268,7 +271,7 @@ func defaultDependencies() Dependencies {
 			return OCRPages(ctx, runner, pages)
 		},
 		Extract: func(ctx context.Context, pages []Page, ocr []OCRPage, cfg Config) ExtractionResult {
-			ai := NewOpenAIExtractor(http.DefaultClient, cfg.APIURL, cfg.APIKey, cfg.TextModel, cfg.VisionModel, cfg.MaxTextAttempts)
+			ai := NewAnthropicExtractor(http.DefaultClient, cfg.APIURL, cfg.APIKey, cfg.TextModel, cfg.VisionModel, cfg.MaxTextAttempts)
 			return RunExtraction(ctx, ai, pages, ocr, cfg)
 		},
 		Connect: db.Connect,

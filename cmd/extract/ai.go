@@ -27,6 +27,162 @@ type AIExtractor interface {
 	Extract(context.Context, ExtractRequest) ([]RawCandidate, error)
 }
 
+const anthropicCandidateToolName = "submit_catalog_candidates"
+
+// AnthropicExtractor adapts the Anthropic Messages API tool-use response to
+// the pipeline's existing strict RawCandidate contract.
+type AnthropicExtractor struct {
+	httpClient  *http.Client
+	apiURL      string
+	apiKey      string
+	textModel   string
+	visionModel string
+	maxAttempts int
+}
+
+func NewAnthropicExtractor(httpClient *http.Client, apiURL, apiKey, textModel, visionModel string, maxAttempts int) *AnthropicExtractor {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	return &AnthropicExtractor{
+		httpClient: httpClient, apiURL: anthropicMessagesURL(apiURL), apiKey: apiKey,
+		textModel: textModel, visionModel: visionModel, maxAttempts: maxAttempts,
+	}
+}
+
+func (e *AnthropicExtractor) Extract(ctx context.Context, request ExtractRequest) ([]RawCandidate, error) {
+	candidates, _, err := e.ExtractWithMetrics(ctx, request)
+	return candidates, err
+}
+
+func (e *AnthropicExtractor) ExtractWithMetrics(ctx context.Context, request ExtractRequest) ([]RawCandidate, AICallCounts, error) {
+	counts := AICallCounts{}
+	payload, err := e.requestPayload(request)
+	if err != nil {
+		return nil, counts, err
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, counts, fmt.Errorf("marshal Anthropic request: %w", err)
+	}
+	for attempt := 0; attempt < e.maxAttempts; attempt++ {
+		response, err := e.doRequest(ctx, body, request.Mode, &counts)
+		if err != nil {
+			return nil, counts, err
+		}
+		if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
+			candidates, err := parseAnthropicResponse(response.Body)
+			response.Body.Close()
+			return candidates, counts, err
+		}
+		status := response.StatusCode
+		detail := apiErrorDetail(response.Body, e.apiKey)
+		response.Body.Close()
+		if !isRetryableStatus(status) || attempt == e.maxAttempts-1 {
+			return nil, counts, fmt.Errorf("Anthropic Messages API returned HTTP %d%s", status, detail)
+		}
+		if err := waitForRetry(ctx, attempt); err != nil {
+			return nil, counts, err
+		}
+	}
+	return nil, counts, fmt.Errorf("Anthropic Messages API attempts exhausted")
+}
+
+func (e *AnthropicExtractor) doRequest(ctx context.Context, body []byte, mode string, counts *AICallCounts) (*http.Response, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, e.apiURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create Anthropic request: %w", err)
+	}
+	request.Header.Set("x-api-key", e.apiKey)
+	request.Header.Set("anthropic-version", "2023-06-01")
+	request.Header.Set("Content-Type", "application/json")
+	recordAIAttempt(counts, mode)
+	response, err := e.httpClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("send Anthropic request: %w", err)
+	}
+	return response, nil
+}
+
+func (e *AnthropicExtractor) requestPayload(request ExtractRequest) (map[string]any, error) {
+	model := e.textModel
+	if len(request.Images) > 0 {
+		model = e.visionModel
+	}
+	content := []map[string]any{{"type": "text", "text": requestText(request)}}
+	for _, page := range request.Images {
+		dataURL, err := imageDataURL(page.ImagePath)
+		if err != nil {
+			return nil, err
+		}
+		parts := strings.SplitN(dataURL, ",", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("encode page image")
+		}
+		mediaType := strings.TrimSuffix(strings.TrimPrefix(parts[0], "data:"), ";base64")
+		content = append(content, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": mediaType, "data": parts[1]}})
+	}
+	return map[string]any{
+		"model": model, "max_tokens": 8192, "system": extractionSystemPrompt,
+		"messages":    []map[string]any{{"role": "user", "content": content}},
+		"tools":       []map[string]any{{"name": anthropicCandidateToolName, "description": "Return the extracted catalog candidates as structured data.", "input_schema": candidateSchema()}},
+		"tool_choice": map[string]any{"type": "tool", "name": anthropicCandidateToolName},
+	}, nil
+}
+
+func anthropicMessagesURL(apiURL string) string {
+	apiURL = strings.TrimRight(apiURL, "/")
+	if strings.HasSuffix(apiURL, "/v1/messages") {
+		return apiURL
+	}
+	return apiURL + "/v1/messages"
+}
+
+func parseAnthropicResponse(body io.Reader) ([]RawCandidate, error) {
+	data, err := io.ReadAll(io.LimitReader(body, maxResponseBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read Anthropic response: %w", err)
+	}
+	if len(data) > maxResponseBytes {
+		return nil, fmt.Errorf("Anthropic response too large")
+	}
+	var response struct {
+		Content []struct {
+			Type  string          `json:"type"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		} `json:"content"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(&response); err != nil {
+		return nil, fmt.Errorf("decode Anthropic response: %w", err)
+	}
+	if err := requireEOF(decoder); err != nil {
+		return nil, fmt.Errorf("decode Anthropic response: %w", err)
+	}
+	for _, content := range response.Content {
+		if content.Type == "tool_use" && content.Name == anthropicCandidateToolName {
+			return decodeStructuredCandidates(content.Input)
+		}
+	}
+	return nil, fmt.Errorf("Anthropic response has no %s tool_use", anthropicCandidateToolName)
+}
+
+func apiErrorDetail(body io.Reader, secret string) string {
+	data, err := io.ReadAll(io.LimitReader(body, 4097))
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	message := strings.TrimSpace(string(data[:min(len(data), 4096)]))
+	if message == "" {
+		return ""
+	}
+	return ": " + safeError(fmt.Errorf("%s", message), secret).Error()
+}
+
 type OpenAIExtractor struct {
 	httpClient  *http.Client
 	apiURL      string

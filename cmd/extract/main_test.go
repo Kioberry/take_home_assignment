@@ -16,9 +16,9 @@ import (
 func TestParseConfigDefaultsFlagsAndEnvironment(t *testing.T) {
 	getenv := func(name string) string {
 		return map[string]string{
-			"OPENAI_API_KEY":      "test-key",
-			"OPENAI_TEXT_MODEL":   "text-override",
-			"OPENAI_VISION_MODEL": "vision-override",
+			"ANTHROPIC_API_KEY":      "test-key",
+			"ANTHROPIC_TEXT_MODEL":   "text-override",
+			"ANTHROPIC_VISION_MODEL": "vision-override",
 		}[name]
 	}
 
@@ -38,14 +38,14 @@ func TestParseConfigDefaultsFlagsAndEnvironment(t *testing.T) {
 	if cfg.TextModel != "text-override" || cfg.VisionModel != "vision-override" {
 		t.Fatalf("models = %q/%q, want environment overrides", cfg.TextModel, cfg.VisionModel)
 	}
-	if cfg.PDFPath != pdfPath || cfg.RunRoot != "tmp/extraction" || cfg.APIURL != "https://api.openai.com" {
+	if cfg.PDFPath != pdfPath || cfg.RunRoot != "tmp/extraction" || cfg.APIURL != "https://api.anthropic.com" {
 		t.Fatalf("paths/API URL = %#v, want default CLI locations", cfg)
 	}
 }
 
 func TestParseConfigRejectsInvalidOrConflictingInput(t *testing.T) {
 	getenv := func(name string) string {
-		if name == "OPENAI_API_KEY" {
+		if name == "ANTHROPIC_API_KEY" {
 			return "test-key"
 		}
 		return ""
