@@ -147,3 +147,9 @@ or Blocked.
 - Next action: treat the artifact failures as a cross-platform defect requiring
   a separate fix plan; do not run the paid PDF smoke test while the static/unit
   gate is failed and Docker is unavailable.
+
+### 2026-07-23T17:14:26.7120280+08:00 — Portable unit-test subset
+
+- Command: `go test ./cmd/extract -count=1 -skip 'TestArtifact|TestPersistCandidate|TestEnsureEmptyCatalog'`; followed by `go test ./cmd/verify ./db ./database/generated ./stormland/generated -count=1`; then `git diff --check`.
+- Result: Passed. The cmd/extract non-artifact/non-database test subset passed in 2.145 seconds. Packages without tests built successfully, and the whitespace check passed.
+- Scope: this confirms the provider contract, PDF/OCR command boundaries, merge/deduplication, normalization/validation, adaptive recovery, and dependency-injected CLI/report paths. It does not replace the blocked artifact or database integration gates.
