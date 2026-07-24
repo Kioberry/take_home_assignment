@@ -427,3 +427,29 @@ or Blocked.
 - Documentation: replaced the branch-local uppercase `EVALUATION.md` with the `astrid` branch's `evaluation.md` as the canonical evaluator narrative, preserving its design-process, ontology, and pipeline explanation.
 - Completed: appended only verified final evidence: the successful 39-page/80-candidate dry run, five explicit human-review records, and fresh-database persistence counts (80 items, 219 effects, 155 limitations). No failed dry-run status is presented as the final result.
 - Scope: documentation-only normalization for case-safe integration with `astrid`; no API request or database operation occurred.
+
+### 2026-07-25T01:47:34+08:00 — Replay display-name and review-state hardening
+
+- Diagnosis: the successful artifact replay preserved inconsistent source casing
+  because item names bypassed `Normalize`; resume also loaded stale
+  `normalized.json` directly and could lose review membership recorded in
+  `review.json`.
+- Completed: canonical display-name normalization now runs before persistence;
+  resume rebuilds normalized candidates from raw artifacts, restores prior
+  review membership/reasons, and retains the existing artifact graph checks.
+- Evidence: commit `44f3700` (`fix: normalize replayed catalog names`), full
+  `go test ./cmd/extract -count=1` passed, and focused regression tests cover
+  casing, hyphenated names, replay normalization, and review-state restoration.
+
+### 2026-07-25T01:48:01+08:00 — Corrected catalog replay verification
+
+- Command: artifact-only replay of `20260724T-debug-dryrun` into the isolated
+  `oddities_catalog` database, followed by read-only SQL verification.
+- Result: 80 `magic_item`, 219 `effect`, and 155 `limitation` rows; five items
+  have `needs_review=true`. Sample names now use canonical display casing,
+  including `Amulet of Amplified Emotion`, `Amulet of Encasement`, and
+  `Armor of Daylight's Embrace`.
+- Scope: no model request was made. The user subsequently reported that the
+  database still has an issue; the next session must inspect the five review
+  rows against raw/normalized/review artifacts and source pages before claiming
+  the database is semantically correct.

@@ -45,7 +45,7 @@ Wear location is a controlled `wear_slot` value on `MagicItem`, rather than an
 entity: the assignment needs it to identify equipment conflicts. Its values are
 `head`, `neck`, `torso`, `outerwear`, `hands`, `feet`, and `finger`.
 
-I deliberately did not model every creature, environment, or detailed effect
+I did not model every creature, environment, or detailed effect
 subtype mentioned in the PDF. Those terms are too sparse or inconsistent for a
 stable vocabulary, so they remain in source-grounded descriptions.
 
@@ -127,57 +127,60 @@ restriction from an effect-specific one. The composite foreign key
 `(effect_id, item_id)` prevents cross-item references. Deleting an item
 cascades to its dependent Effects and Limitations, matching their lifecycle.
 
-## 2. Pipeline quality
+## 2. Extraction Pipeline
 
-The pipeline design uses AI for semantic extraction and deterministic code for
-data quality.
+### Pipeline Workflow
 
-It first produces page-aware OCR text in batches. AI identifies item
-boundaries, effects, and limitations through structured JSON; it preserves raw
-source text and reports uncertainty instead of guessing. Code then normalizes
-known variants into canonical values and validates ontology rules.
+Page-aware OCR is processed in overlapping batches, then AI returns structured
+item candidates with source evidence and uncertainty. Code merges duplicates,
+normalizes canonical values, and validates ontology rules.
 
-Invalid or incomplete records receive a targeted image-based retry. Unresolved
-records are marked for review or reported as failures, never silently inserted.
-This keeps routine extraction efficient while reserving expensive multimodal
-calls for ambiguous pages. Completeness is checked against page, item, and
-cross-page-record counts.
+Only invalid or visually ambiguous candidates receive targeted image recovery
+and one reconciliation attempt; every candidate then becomes `accepted`,
+`needs_review`, or `failed`. Artifacts and full-run checks make that result
+auditable before database writes.
 
-```text
-PDF pages
-  -> OCR with page numbers
-  -> AI extraction: semantic boundaries and meaning
-  -> Deterministic code: normalize and validate
-       | valid                         | invalid or incomplete
-       v                               v
-   Persist                      Targeted image retry
-                                      |
-                                      `-> normalize and validate again
-                                             |
-                                             `-> review or failure report
-```
+
+![Extraction pipeline workflow](Extraction-pipeline.jpg)
 
 > AI interprets the source; deterministic code controls data quality and
 > escalation.
 
-## 3. Verified catalog run
 
-The full quality gate is intentionally narrow: it requires all 39 PDF pages,
-exactly 80 accounted candidates, and the four required cross-page records.
-Candidates with source ambiguity may still persist with `needs_review=true`;
-only structural failures or a completeness mismatch block the database write.
-That keeps the normal path fast while preserving an explicit human-review
-queue instead of silently guessing.
+
+### Pipeline Quality
+
+The pipeline uses AI for semantic interpretation and deterministic code for
+repeatable, auditable quality decisions.
+
+
+1. **Use structured prompt to Constrain the model.** A structured JSON schema and explicit instructions
+   constrain boundaries, source evidence, effect splitting, vocabularies, and
+   uncertainty; the model reports ambiguity rather than inventing facts.
+
+2. **Hard-code only stable ontology rules.** Code normalizes known variants such as
+   `cloak -> worn + outerwear`, validates ontology invariants, and leaves
+   unknown values as explicit issues rather than repeated, costly model guesses.
+
+3. **Strengthen the failure modes found in testing.** Repeated tests exposed
+   page-boundary failures: one item could be split across batches, duplicated
+   by overlapping OCR windows, or left as an unresolved continuation. The
+   pipeline therefore overlaps batches, merges only compatible candidates with
+   a stable key, deduplicates their effects and limitations, and treats an
+   unresolved continuation as invalid. These are targeted regression safeguards
+   derived from testing, not hand-written parsing of catalog entries.
+
+
+
+4. **Escalate gracefully and make every outcome visible.** Targeted image recovery and one reconciliation attempt lead every candidate to exactly one visible state: `accepted`, `needs_review`, or `failed`.
+
+
+
+## 3. Verified catalog run
 
 The final successful dry run (`20260724T-debug-dryrun`) rendered all 39 pages,
 normalized 80 candidates, retained five for review, and reported zero
-extraction failures. It used 10 text requests and two targeted image-recovery
-requests, with no retries. Its immutable artifacts were then replayed into a
-fresh dedicated Postgres database without making any further model request.
-The replay inserted 80 `magic_item` records, 219 `effect` records, and 155
-`limitation` records; five items retain `needs_review=true`.
-
-This demonstrates the intended operating model: use AI where semantic reading
-is needed, use deterministic code to make invalid states impossible, and make
-the small remainder visible to a human rather than holding the entire catalog
-hostage to perfect OCR.
+extraction failures, using 10 text requests and two targeted image-recovery
+requests. Replaying its immutable artifacts into a fresh database inserted 80
+`magic_item`, 219 `effect`, and 155 `limitation` records without another model
+request.
