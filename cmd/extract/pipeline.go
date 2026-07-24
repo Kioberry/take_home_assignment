@@ -60,13 +60,21 @@ func RunExtraction(ctx context.Context, ai AIExtractor, pages []Page, ocr []OCRP
 
 	merged, mergeIssues := MergeCandidates(rawBatches)
 	for _, candidate := range merged {
-		evaluation := evaluateCandidate(candidate, pageIndex, mergeIssues)
+		evaluation := evaluateCandidate(candidate, pageIndex, nil)
+		candidateMergeIssues := mergeIssuesForCandidate(candidate, mergeIssues)
 		if len(evaluation.issues) == 0 {
+			if len(candidateMergeIssues) > 0 {
+				evaluation.normalized.NeedsReview = true
+				for _, issue := range candidateMergeIssues {
+					evaluation.normalized.ReviewReasons = append(evaluation.normalized.ReviewReasons, issue.Message)
+				}
+			}
 			addCandidateToBucket(&result, evaluation.normalized)
 			continue
 		}
 
-		final, failure, calls, requests := recoverCandidate(ctx, ai, candidate, evaluation.issues, pageIndex, ocr, resolvedConfig)
+		issues := append(evaluation.issues, candidateMergeIssues...)
+		final, failure, calls, requests := recoverCandidate(ctx, ai, candidate, issues, pageIndex, ocr, resolvedConfig)
 		result.LogicalRequests += requests
 		addAICallCounts(&result, calls)
 		if failure != nil {

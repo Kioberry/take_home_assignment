@@ -264,3 +264,9 @@ or Blocked.
 - Remaining duplicate source identities: page 5 contains `QUATERMASTER'S CHEST` and `Quartermaster's Chest`; page 9 contains `Helm of Ill Omen` and `Helmofillomen`. They are alternate OCR/title renderings of two source entries, but do not share the same normalized name and so were not merged.
 - Recovery failure evidence: `Exo-Armor` and `AXE OF ENEMY ATTUNEMENT` had recoverable `merge_conflict` issues, then each image-recovery request hit the 90-second Responses API timeout. Merge conflicts should become review evidence without requiring image recovery.
 - CLI evidence: the anomaly-first summary correctly surfaced the count gate and the two failed candidates ahead of the 11-item review count. It did not include failure issue messages because `RunFailure.Error` is empty for extraction failures; the next formatter change must render `RunFailure.Issues` when no terminal error string exists.
+
+### 2026-07-24 — Merge-conflict review routing
+
+- Completed: candidates whose only issues are local `merge_conflict` records now bypass image recovery and enter manual review with the conflict messages preserved as review reasons.
+- RED evidence: the focused routing test observed two AI calls because a merge conflict triggered image recovery.
+- GREEN evidence: the same test now observes only the original text extraction and one review candidate; the existing invalid-candidate image-recovery test also remains green.

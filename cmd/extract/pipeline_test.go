@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -125,6 +126,31 @@ func TestRunExtractionRecoversOnlyInvalidCandidateWithSourceAndAdjacentImages(t 
 	}
 	if result.TextCalls != 1 || result.ImageCalls != 1 || result.ReconciliationCalls != 0 || result.APICalls != 2 {
 		t.Fatalf("call accounting = %#v, want one text and one image call", result)
+	}
+}
+
+func TestRunExtractionRoutesMergeConflictToReviewWithoutImageRecovery(t *testing.T) {
+	first := pipelineCandidate("Conflicted", 1)
+	first.RarityRaw = "rare"
+	second := pipelineCandidate("conflicted", 1)
+	second.RarityRaw = "legendary"
+	ai := &scriptedAI{t: t, responses: [][]RawCandidate{{first, second}}}
+
+	result := RunExtraction(context.Background(), ai, pipelinePages(1, 1), pipelineOCR(1, 1), Config{
+		SelectedPages:      []int{1},
+		BatchSize:          5,
+		Overlap:            1,
+		MaxSemanticRetries: 1,
+	})
+
+	if len(ai.requests) != 1 {
+		t.Fatalf("AI calls = %d, want text extraction only", len(ai.requests))
+	}
+	if len(result.Accepted) != 0 || len(result.Review) != 1 || len(result.Failed) != 0 {
+		t.Fatalf("buckets = accepted:%d review:%d failed:%d, want 0/1/0", len(result.Accepted), len(result.Review), len(result.Failed))
+	}
+	if !strings.Contains(strings.Join(result.Review[0].ReviewReasons, "\n"), "conflicting rarity_raw") {
+		t.Fatalf("review reasons = %#v, want merge conflict", result.Review[0].ReviewReasons)
 	}
 }
 
