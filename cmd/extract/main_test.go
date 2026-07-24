@@ -202,6 +202,144 @@ func TestResumeReusesArtifactsSkipsExternalCallsAndRequiresFreshDatabaseLifecycl
 	}
 }
 
+func TestResumeReappliesCurrentNormalizationBeforePersistence(t *testing.T) {
+	cfg := testConfig(t)
+	result := testExtractionResult(t, "Resumed Item")
+	writeResumeArtifacts(t, cfg, result)
+	store, err := NewArtifactStore(cfg.RunRoot, cfg.RunID)
+	if err != nil {
+		t.Fatalf("NewArtifactStore: %v", err)
+	}
+	var raw []RawCandidate
+	var normalized []NormalizedCandidate
+	if err := store.ReadJSON("raw_candidates.json", &raw); err != nil {
+		t.Fatalf("read raw candidates: %v", err)
+	}
+	if err := store.ReadJSON("normalized.json", &normalized); err != nil {
+		t.Fatalf("read normalized candidates: %v", err)
+	}
+	raw[0].Name = "RESUMED ITEM"
+	normalized[0].Raw.Name = "RESUMED ITEM"
+	if err := store.WriteJSON("raw_candidates.json", raw); err != nil {
+		t.Fatalf("write raw candidates: %v", err)
+	}
+	if err := store.WriteJSON("normalized.json", normalized); err != nil {
+		t.Fatalf("write normalized candidates: %v", err)
+	}
+	cfg.Resume = true
+
+	deps := testDependencies(t, ExtractionResult{})
+	deps.Connect = func(context.Context) (*pgxpool.Pool, error) { return nil, nil }
+	deps.ApplySchema = func(context.Context, *pgxpool.Pool) error { return nil }
+	deps.EnsureEmptyCatalog = func(context.Context, *pgxpool.Pool) error { return nil }
+	persistedName := ""
+	deps.Persist = func(_ context.Context, _ *pgxpool.Pool, candidate NormalizedCandidate) error {
+		persistedName = candidate.Raw.Name
+		return nil
+	}
+
+	if err := run(context.Background(), cfg, deps); err != nil {
+		t.Fatalf("resume run: %v", err)
+	}
+	if persistedName != "Resumed Item" {
+		t.Fatalf("persisted name = %q, want %q", persistedName, "Resumed Item")
+	}
+}
+
+func TestResumePreservesPriorReviewStateAfterRenormalization(t *testing.T) {
+	cfg := testConfig(t)
+	result := testExtractionResult(t, "Resumed Item")
+	writeResumeArtifacts(t, cfg, result)
+	store, err := NewArtifactStore(cfg.RunRoot, cfg.RunID)
+	if err != nil {
+		t.Fatalf("NewArtifactStore: %v", err)
+	}
+	var normalized []NormalizedCandidate
+	var report RunReport
+	if err := store.ReadJSON("normalized.json", &normalized); err != nil {
+		t.Fatalf("read normalized candidates: %v", err)
+	}
+	if err := store.ReadJSON("report.json", &report); err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	normalized[0].NeedsReview = true
+	normalized[0].ReviewReasons = []string{"overlap merge conflict"}
+	if err := store.WriteJSON("normalized.json", normalized); err != nil {
+		t.Fatalf("write normalized candidates: %v", err)
+	}
+	if err := store.WriteJSON("review.json", ReviewArtifact{Candidates: normalized}); err != nil {
+		t.Fatalf("write review candidates: %v", err)
+	}
+	report.ReviewCount = 1
+	if err := store.WriteJSON("report.json", report); err != nil {
+		t.Fatalf("write report: %v", err)
+	}
+	cfg.Resume = true
+
+	deps := testDependencies(t, ExtractionResult{})
+	deps.Connect = func(context.Context) (*pgxpool.Pool, error) { return nil, nil }
+	deps.ApplySchema = func(context.Context, *pgxpool.Pool) error { return nil }
+	deps.EnsureEmptyCatalog = func(context.Context, *pgxpool.Pool) error { return nil }
+	var persisted NormalizedCandidate
+	deps.Persist = func(_ context.Context, _ *pgxpool.Pool, candidate NormalizedCandidate) error {
+		persisted = candidate
+		return nil
+	}
+
+	if err := run(context.Background(), cfg, deps); err != nil {
+		t.Fatalf("resume run: %v", err)
+	}
+	if !persisted.NeedsReview || !reflect.DeepEqual(persisted.ReviewReasons, []string{"overlap merge conflict"}) {
+		t.Fatalf("persisted review state = %v/%#v, want true with preserved reason", persisted.NeedsReview, persisted.ReviewReasons)
+	}
+}
+
+func TestResumeRestoresReviewMembershipFromReviewArtifact(t *testing.T) {
+	cfg := testConfig(t)
+	result := testExtractionResult(t, "Resumed Item")
+	writeResumeArtifacts(t, cfg, result)
+	store, err := NewArtifactStore(cfg.RunRoot, cfg.RunID)
+	if err != nil {
+		t.Fatalf("NewArtifactStore: %v", err)
+	}
+	var normalized []NormalizedCandidate
+	var report RunReport
+	if err := store.ReadJSON("normalized.json", &normalized); err != nil {
+		t.Fatalf("read normalized candidates: %v", err)
+	}
+	if err := store.ReadJSON("report.json", &report); err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	reviewCandidate := normalized[0]
+	reviewCandidate.NeedsReview = true
+	reviewCandidate.ReviewReasons = []string{"overlap merge conflict"}
+	if err := store.WriteJSON("review.json", ReviewArtifact{Candidates: []NormalizedCandidate{reviewCandidate}}); err != nil {
+		t.Fatalf("write review candidates: %v", err)
+	}
+	report.ReviewCount = 1
+	if err := store.WriteJSON("report.json", report); err != nil {
+		t.Fatalf("write report: %v", err)
+	}
+	cfg.Resume = true
+
+	deps := testDependencies(t, ExtractionResult{})
+	deps.Connect = func(context.Context) (*pgxpool.Pool, error) { return nil, nil }
+	deps.ApplySchema = func(context.Context, *pgxpool.Pool) error { return nil }
+	deps.EnsureEmptyCatalog = func(context.Context, *pgxpool.Pool) error { return nil }
+	var persisted NormalizedCandidate
+	deps.Persist = func(_ context.Context, _ *pgxpool.Pool, candidate NormalizedCandidate) error {
+		persisted = candidate
+		return nil
+	}
+
+	if err := run(context.Background(), cfg, deps); err != nil {
+		t.Fatalf("resume run: %v", err)
+	}
+	if !persisted.NeedsReview || !reflect.DeepEqual(persisted.ReviewReasons, []string{"overlap merge conflict"}) {
+		t.Fatalf("persisted review state = %v/%#v, want true with restored reason", persisted.NeedsReview, persisted.ReviewReasons)
+	}
+}
+
 func TestResumeRejectsIncompatiblePagesBeforeDatabaseWork(t *testing.T) {
 	cfg := testConfig(t)
 	writeResumeArtifacts(t, cfg, testExtractionResult(t, "Resume Item"))
