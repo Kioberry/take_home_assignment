@@ -192,6 +192,12 @@ type OpenAIExtractor struct {
 	maxAttempts int
 }
 
+const defaultOpenAIRequestTimeout = 90 * time.Second
+
+func newOpenAIHTTPClient() *http.Client {
+	return &http.Client{Timeout: defaultOpenAIRequestTimeout}
+}
+
 func NewOpenAIExtractor(httpClient *http.Client, apiURL, apiKey, textModel, visionModel string, maxAttempts int) *OpenAIExtractor {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
@@ -228,9 +234,11 @@ func (e *OpenAIExtractor) ExtractWithMetrics(ctx context.Context, request Extrac
 	}
 
 	for attempt := 0; attempt < e.maxAttempts; attempt++ {
+		started := time.Now()
 		response, err := e.doRequest(ctx, body, request.Mode, &counts)
+		elapsed := time.Since(started).Round(time.Millisecond)
 		if err != nil {
-			return nil, counts, err
+			return nil, counts, fmt.Errorf("Responses API request failed after %s: %w", elapsed, err)
 		}
 		if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
 			candidates, err := parseResponse(response.Body)
@@ -238,9 +246,10 @@ func (e *OpenAIExtractor) ExtractWithMetrics(ctx context.Context, request Extrac
 			return candidates, counts, err
 		}
 		status := response.StatusCode
+		detail := apiErrorDetail(response.Body, e.apiKey)
 		response.Body.Close()
 		if !isRetryableStatus(status) || attempt == e.maxAttempts-1 {
-			return nil, counts, fmt.Errorf("Responses API returned HTTP %d", status)
+			return nil, counts, fmt.Errorf("Responses API returned HTTP %d after %s%s", status, elapsed, detail)
 		}
 		if err := waitForRetry(ctx, attempt); err != nil {
 			return nil, counts, err

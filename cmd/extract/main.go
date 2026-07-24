@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -271,7 +270,7 @@ func defaultDependencies() Dependencies {
 			return OCRPages(ctx, runner, pages)
 		},
 		Extract: func(ctx context.Context, pages []Page, ocr []OCRPage, cfg Config) ExtractionResult {
-			ai := NewOpenAIExtractor(http.DefaultClient, cfg.APIURL, cfg.APIKey, cfg.TextModel, cfg.VisionModel, cfg.MaxTextAttempts)
+			ai := NewOpenAIExtractor(newOpenAIHTTPClient(), cfg.APIURL, cfg.APIKey, cfg.TextModel, cfg.VisionModel, cfg.MaxTextAttempts)
 			return RunExtraction(ctx, ai, pages, ocr, cfg)
 		},
 		Connect: db.Connect,

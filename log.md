@@ -166,3 +166,21 @@ or Blocked.
 - Decision: restore the default extraction provider to OpenAI Responses API after the owner configured a local `OPENAI_API_KEY` and selected `gpt-5.6-luna` for routine OCR batches plus `gpt-5.6-terra` for targeted image recovery.
 - Reasoning: the OpenAI provider already has strict structured-output, retry, image-input, and regression coverage. The prior Claude path returned a model-not-found response and remains historical, not the active runtime route.
 - Verification status: configuration and local provider tests are rerun after this change. No live OpenAI extraction is claimed until the bounded pages 7-9 dry-run completes with the owner's explicit document-sharing authorization.
+
+### 2026-07-24 — OpenAI bounded smoke attempt
+
+- Command: `go run ./cmd/extract --dry-run --pages 7-9` with the owner's explicit authorization to send those pages' OCR content to OpenAI.
+- Result: **Interrupted / unverified.** The process produced no response or pre-database artifacts after approximately four minutes and was interrupted locally to stop the waiting request. Run directory `20260724T001950.744964000Z` exists but contains no artifacts or report.
+- Evidence limit: this attempt does not establish a provider, extraction, or catalog-quality failure. Before another paid attempt, add a bounded HTTP timeout and record a terminal diagnostic outcome.
+
+### 2026-07-24 — Project progress-recording rule
+
+- Completed: added project-level `AGENT.md` with the instruction that every completed step is recorded in this engineering log.
+
+### 2026-07-24 — OpenAI timeout and HTTP diagnostics
+
+- Diagnosis: the configured OpenAI key and network path were verified with `GET /v1/models` (HTTP 200 in 1.232 seconds); `gpt-5.6-luna` and `gpt-5.6-terra` were available to the key. The interrupted smoke attempt was therefore not a key or basic connectivity failure.
+- Completed: production OpenAI requests now use a dedicated client with a 90-second total timeout. Transport errors include elapsed time, and non-2xx responses include HTTP status, elapsed time, and a safely redacted, truncated server response detail.
+- RED evidence: focused timeout tests initially failed because `newOpenAIHTTPClient` and `defaultOpenAIRequestTimeout` did not exist.
+- GREEN evidence: `go test ./cmd/extract -run 'Test(OpenAIExtractorDoesNotRetryPermanentHTTPError|NewOpenAIHTTPClientUsesBoundedTimeout|OpenAIExtractorReportsTransportTimeoutWithDuration)' -count=1` passed.
+- Full verification: `go vet ./...`, `go test ./... -count=1`, and `git diff --check` passed on macOS with local PostgreSQL available.

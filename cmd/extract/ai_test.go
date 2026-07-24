@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOpenAIExtractorSendsStrictStructuredTextRequest(t *testing.T) {
@@ -90,11 +91,31 @@ func TestOpenAIExtractorDoesNotRetryPermanentHTTPError(t *testing.T) {
 
 	extractor := NewOpenAIExtractor(server.Client(), server.URL, "test-key", "text-model", "vision-model", 3)
 	_, err := extractor.Extract(context.Background(), ExtractRequest{OCR: []OCRPage{{Number: 1, Text: "item"}}})
-	if err == nil || !strings.Contains(err.Error(), "400") {
-		t.Fatalf("error = %v, want HTTP 400 error", err)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 400 after") || !strings.Contains(err.Error(), "bad request") {
+		t.Fatalf("error = %v, want HTTP 400 duration and response detail", err)
 	}
 	if calls != 1 {
 		t.Fatalf("calls = %d, want no retry", calls)
+	}
+}
+
+func TestNewOpenAIHTTPClientUsesBoundedTimeout(t *testing.T) {
+	if got := newOpenAIHTTPClient().Timeout; got != defaultOpenAIRequestTimeout {
+		t.Fatalf("Timeout = %s, want %s", got, defaultOpenAIRequestTimeout)
+	}
+}
+
+func TestOpenAIExtractorReportsTransportTimeoutWithDuration(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		writeResponse(t, w, successfulResponse(candidateJSON(t)))
+	}))
+	defer server.Close()
+
+	extractor := NewOpenAIExtractor(&http.Client{Timeout: 5 * time.Millisecond}, server.URL, "test-key", "text-model", "vision-model", 1)
+	_, err := extractor.Extract(context.Background(), ExtractRequest{OCR: []OCRPage{{Number: 1, Text: "item"}}})
+	if err == nil || !strings.Contains(err.Error(), "request failed after") || !strings.Contains(strings.ToLower(err.Error()), "timeout") {
+		t.Fatalf("error = %v, want timeout with request duration", err)
 	}
 }
 
