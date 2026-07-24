@@ -36,6 +36,37 @@ func TestOpenAIExtractorSendsStrictStructuredTextRequest(t *testing.T) {
 	}
 }
 
+func TestExtractionSystemPromptDefinesClosedOntologyVocabulary(t *testing.T) {
+	for _, required := range []string{
+		"usage_mode_raw: exactly one of worn, held, portable, consumed, worn armor, worn weapon, held armor, held weapon",
+		"wear_slot_raw: null or exactly one of head, neck, torso, outerwear, hands, feet, finger",
+		"category_raw: exactly one of offensive, defensive, utility",
+		"never put cooldowns, actions, durations, charges, or ability descriptions in usage_mode_raw",
+		"Mode recover or reconcile: return exactly one candidate",
+	} {
+		if !strings.Contains(strings.ToLower(extractionSystemPrompt), strings.ToLower(required)) {
+			t.Fatalf("system prompt is missing %q", required)
+		}
+	}
+}
+
+func TestRequestTextMakesRecoveryTargetAndCardinalityExplicit(t *testing.T) {
+	text := requestText(ExtractRequest{
+		Mode:   "recover",
+		Prior:  []RawCandidate{{Name: "Exo-Armor", SourcePages: []int{7, 8, 9}}},
+		Issues: []ValidationIssue{{Code: "unknown_usage_mode", Message: "bad value", Recoverable: true}},
+	})
+	for _, required := range []string{
+		"Recovery target: Exo-Armor",
+		"Return exactly one candidate: the corrected replacement for Exo-Armor.",
+		"Do not return neighboring or additional catalog items.",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("recovery request is missing %q", required)
+		}
+	}
+}
+
 func TestOpenAIExtractorUsesVisionModelAndDataURLs(t *testing.T) {
 	imagePath := filepath.Join(t.TempDir(), "page-008.png")
 	image := []byte{0x89, 0x50, 0x4e, 0x47}

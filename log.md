@@ -184,3 +184,21 @@ or Blocked.
 - RED evidence: focused timeout tests initially failed because `newOpenAIHTTPClient` and `defaultOpenAIRequestTimeout` did not exist.
 - GREEN evidence: `go test ./cmd/extract -run 'Test(OpenAIExtractorDoesNotRetryPermanentHTTPError|NewOpenAIHTTPClientUsesBoundedTimeout|OpenAIExtractorReportsTransportTimeoutWithDuration)' -count=1` passed.
 - Full verification: `go vet ./...`, `go test ./... -count=1`, and `git diff --check` passed on macOS with local PostgreSQL available.
+
+### 2026-07-24 — OpenAI bounded smoke test, pages 7-9
+
+- Command: `go run ./cmd/extract --dry-run --pages 7-9` with explicit authorization to send those pages' OCR content to OpenAI.
+- Run ID: `20260724T023331.394467000Z`.
+- Result: **Failed with extraction-quality evidence, not timeout or key failure.** The run completed one text extraction and four targeted image-recovery calls (`api_calls=5`) within the configured request timeout. It did not connect to or write PostgreSQL.
+- Observed outcome: four candidates were extracted, but none normalized or entered review. The model emitted descriptive phrases in closed enum fields (`usage_mode`, `wear_slot`, and `effect_category`) instead of the required canonical values. Each targeted recovery also returned multiple candidates where the recovery contract requires exactly one candidate.
+- Scope: Exo-Armor correctly appeared as a pages 7-9 candidate, so the cross-page merge path was exercised; it still failed normalization/recovery because its structured enum values were invalid.
+- Next action: treat this as a provider-prompt/response-contract defect. Create a separate fix plan and do not claim the smoke gate passed.
+
+### 2026-07-24 — Extraction prompt contract hardening
+
+- Root cause: the prompt asked for source-grounded extraction but did not state the closed ontology vocabulary or the recovery response cardinality. The JSON Schema constrained these fields to strings but could not prevent semantic labels such as `movement`, `helm`, or cooldown text.
+- Completed: the system prompt now enumerates allowed source type, rarity, usage mode, wear slot, and effect-category values; explains the armor/helm/cloak/ring mappings; prohibits ability/cooldown text in `usage_mode_raw`; and defines primary-purpose effect classification.
+- Completed: recovery and reconciliation request text now names the target candidate and requires exactly one corrected replacement, prohibiting page-neighbor or additional item responses.
+- RED evidence: the new prompt-contract tests failed because the original prompt omitted the closed vocabulary and recovery-target instructions.
+- GREEN evidence: `go test ./cmd/extract -run 'Test(ExtractionSystemPromptDefinesClosedOntologyVocabulary|RequestTextMakesRecoveryTargetAndCardinalityExplicit|OpenAIExtractor)' -count=1` passed.
+- Full verification: `go vet ./...`, `go test ./... -count=1`, and `git diff --check` passed on macOS with local PostgreSQL available.

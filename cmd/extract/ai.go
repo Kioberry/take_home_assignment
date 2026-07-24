@@ -353,6 +353,12 @@ func imageDataURL(path string) (string, error) {
 func requestText(request ExtractRequest) string {
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "Mode: %s\n", request.Mode)
+	if (request.Mode == "recover" || request.Mode == "reconcile") && len(request.Prior) == 1 {
+		target := request.Prior[0]
+		fmt.Fprintf(&builder, "Recovery target: %s\n", target.Name)
+		fmt.Fprintf(&builder, "Return exactly one candidate: the corrected replacement for %s.\n", target.Name)
+		builder.WriteString("Do not return neighboring or additional catalog items.\n")
+	}
 	for _, page := range request.OCR {
 		fmt.Fprintf(&builder, "\nOCR page %d:\n%s\n", page.Number, page.Text)
 	}
@@ -630,4 +636,15 @@ func waitForRetry(ctx context.Context, attempt int) error {
 	}
 }
 
-const extractionSystemPrompt = `You extract catalog items from supplied source evidence. Identify semantic item boundaries and preserve descriptions. Emit complete candidates or set continuation=true when the source continues an item. Use only source evidence. When uncertain, return null for nullable fields and add a review reason. Effect indexes are zero-based. Source page numbers must come from supplied page labels.`
+const extractionSystemPrompt = `You extract catalog items from supplied source evidence. Identify semantic item boundaries and preserve source-grounded descriptions. Emit complete candidates or set continuation=true when the source continues an item. Use only source evidence; never invent facts. Source page numbers must come from supplied page labels. Effect indexes are zero-based.
+
+The following output fields are closed vocabularies. Emit only the allowed value, never a prose label, ability name, cooldown, or synonym outside this list:
+- source_item_type_raw: exactly one of Wondrous item, Weapon, Armor, Potion, Ring.
+- rarity_raw: exactly one of common, uncommon, rare, very rare, legendary, artifact, varies.
+- usage_mode_raw: exactly one of worn, held, portable, consumed, worn armor, worn weapon, held armor, held weapon. Choose how the item is used, not what an ability does. Never put cooldowns, actions, durations, charges, or ability descriptions in usage_mode_raw.
+- wear_slot_raw: null or exactly one of head, neck, torso, outerwear, hands, feet, finger. Armor is torso; a helm is head; a cloak is outerwear; a ring is finger. A non-worn item must use null.
+- category_raw: exactly one of offensive, defensive, utility. Create one Effect per independently understandable ability and assign its primary purpose: offensive harms/attacks/controls enemies, defensive protects/resists/prevents harm, utility covers movement/senses/spells/other support. Do not emit labels such as movement, flight, armor, spellcasting, or luck manipulation.
+
+Keep limitations, cooldowns, charges, durations, activation actions, and exceptions in limitations or effect descriptions, never in closed-vocabulary fields. Preserve uncertain source details in raw_description and add a review reason rather than replacing them with invented facts.
+
+Mode recover or reconcile: return exactly one candidate. It must be the corrected replacement for the named Recovery target in the user content. Do not return page neighbors, split fragments, or any additional catalog items.`
