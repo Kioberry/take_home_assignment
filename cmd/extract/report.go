@@ -34,6 +34,7 @@ type RunReport struct {
 	APICalls                int               `json:"api_calls"`
 	LogicalRequests         int               `json:"logical_requests"`
 	RetryCount              int               `json:"retry_count"`
+	RecoveryEvents          []RecoveryEvent   `json:"recovery_events,omitempty"`
 	Failures                []RunFailure      `json:"failures,omitempty"`
 	CompletenessIssues      []ValidationIssue `json:"completeness_issues,omitempty"`
 }
@@ -62,6 +63,7 @@ func newRunReport(cfg Config, pages []Page, result ExtractionResult) RunReport {
 		APICalls:                result.APICalls,
 		LogicalRequests:         result.LogicalRequests,
 		RetryCount:              retryCount(result.APICalls, result.LogicalRequests),
+		RecoveryEvents:          append([]RecoveryEvent(nil), result.RecoveryEvents...),
 		Failures:                failuresFromExtraction(result.Failed),
 		CompletenessIssues:      append([]ValidationIssue(nil), result.CompletenessIssues...),
 	}

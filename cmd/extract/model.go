@@ -133,6 +133,16 @@ type ExtractionFailure struct {
 	Stage     string            `json:"stage"`
 }
 
+// RecoveryEvent makes each targeted image or reconciliation request auditable
+// in the durable run report without retaining OCR text or image data.
+type RecoveryEvent struct {
+	CandidateName string            `json:"candidate_name"`
+	SourcePages   []int             `json:"source_pages"`
+	Stage         string            `json:"stage"`
+	Outcome       string            `json:"outcome"`
+	TriggerIssues []ValidationIssue `json:"trigger_issues"`
+}
+
 // ExtractionResult is the bounded-recovery outcome consumed by later
 // persistence and reporting steps. Each extracted candidate belongs to exactly
 // one of Accepted, Review, or Failed. Call counts are retained for run reports.
@@ -140,6 +150,7 @@ type ExtractionResult struct {
 	Accepted            []NormalizedCandidate `json:"accepted"`
 	Review              []NormalizedCandidate `json:"review"`
 	Failed              []ExtractionFailure   `json:"failed"`
+	RecoveryEvents      []RecoveryEvent       `json:"recovery_events"`
 	CompletenessIssues  []ValidationIssue     `json:"completeness_issues"`
 	LogicalRequests     int                   `json:"logical_requests"`
 	TextCalls           int                   `json:"text_calls"`

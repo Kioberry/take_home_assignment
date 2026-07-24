@@ -1,11 +1,50 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestReportIncludesSuccessfulImageRecoveryEvent(t *testing.T) {
+	invalid := pipelineCandidate("Blurred", 1)
+	invalid.RarityRaw = "mythic"
+	fixed := pipelineCandidate("Blurred", 1)
+	ai := &scriptedAI{t: t, responses: [][]RawCandidate{{invalid}, {fixed}}}
+	result := RunExtraction(context.Background(), ai, pipelinePages(1, 1), pipelineOCR(1, 1), Config{
+		SelectedPages:      []int{1},
+		BatchSize:          5,
+		Overlap:            1,
+		MaxSemanticRetries: 1,
+	})
+
+	encoded, err := json.Marshal(newRunReport(testConfig(t), pipelinePages(1, 1), result))
+	if err != nil {
+		t.Fatalf("marshal report: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("decode report: %v", err)
+	}
+	events, found := payload["recovery_events"].([]any)
+	if !found || len(events) != 1 {
+		t.Fatalf("recovery events = %#v, want one image recovery event", payload["recovery_events"])
+	}
+	event, ok := events[0].(map[string]any)
+	if !ok {
+		t.Fatalf("event = %#v, want object", events[0])
+	}
+	if event["candidate_name"] != "Blurred" || event["stage"] != "image" || event["outcome"] != "succeeded" {
+		t.Fatalf("event = %#v, want successful image recovery for Blurred", event)
+	}
+	issues, found := event["trigger_issues"].([]any)
+	if !found || len(issues) == 0 {
+		t.Fatalf("trigger issues = %#v, want recovery reason", event["trigger_issues"])
+	}
+}
 
 func TestReportWritesPreDBArtifactsAndResumeSafeAccounting(t *testing.T) {
 	cfg := testConfig(t)

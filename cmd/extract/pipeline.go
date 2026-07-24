@@ -32,6 +32,7 @@ func RunExtraction(ctx context.Context, ai AIExtractor, pages []Page, ocr []OCRP
 		Accepted:           make([]NormalizedCandidate, 0),
 		Review:             make([]NormalizedCandidate, 0),
 		Failed:             make([]ExtractionFailure, 0),
+		RecoveryEvents:     make([]RecoveryEvent, 0),
 		CompletenessIssues: make([]ValidationIssue, 0),
 	}
 	if ai == nil {
@@ -72,9 +73,10 @@ func RunExtraction(ctx context.Context, ai AIExtractor, pages []Page, ocr []OCRP
 				continue
 			}
 			if candidate.ReviewKind == ReviewKindVisualAmbiguity {
-				final, failure, calls, requests := recoverCandidate(ctx, ai, candidate, []ValidationIssue{pipelineIssue("visual_ambiguity", "source image review requested", true)}, pageIndex, ocr, resolvedConfig)
+				final, failure, calls, requests, events := recoverCandidate(ctx, ai, candidate, []ValidationIssue{pipelineIssue("visual_ambiguity", "source image review requested", true)}, pageIndex, ocr, resolvedConfig)
 				result.LogicalRequests += requests
 				addAICallCounts(&result, calls)
+				result.RecoveryEvents = append(result.RecoveryEvents, events...)
 				if failure != nil {
 					result.Failed = append(result.Failed, *failure)
 				} else {
@@ -87,9 +89,10 @@ func RunExtraction(ctx context.Context, ai AIExtractor, pages []Page, ocr []OCRP
 		}
 
 		issues := append(evaluation.issues, candidateMergeIssues...)
-		final, failure, calls, requests := recoverCandidate(ctx, ai, candidate, issues, pageIndex, ocr, resolvedConfig)
+		final, failure, calls, requests, events := recoverCandidate(ctx, ai, candidate, issues, pageIndex, ocr, resolvedConfig)
 		result.LogicalRequests += requests
 		addAICallCounts(&result, calls)
+		result.RecoveryEvents = append(result.RecoveryEvents, events...)
 		if failure != nil {
 			result.Failed = append(result.Failed, *failure)
 			continue
@@ -121,9 +124,10 @@ func addAICallCounts(result *ExtractionResult, calls AICallCounts) {
 	result.APICalls += calls.APICalls
 }
 
-func recoverCandidate(ctx context.Context, ai AIExtractor, original RawCandidate, initialIssues []ValidationIssue, pageIndex map[int]Page, ocr []OCRPage, cfg Config) (NormalizedCandidate, *ExtractionFailure, AICallCounts, int) {
+func recoverCandidate(ctx context.Context, ai AIExtractor, original RawCandidate, initialIssues []ValidationIssue, pageIndex map[int]Page, ocr []OCRPage, cfg Config) (NormalizedCandidate, *ExtractionFailure, AICallCounts, int, []RecoveryEvent) {
 	calls := AICallCounts{}
 	logicalRequests := 0
+	events := make([]RecoveryEvent, 0, 2)
 	selectedImages := recoveryPages(original.SourcePages, pageIndex)
 	selectedOCR := ocrForPages(ocr, selectedImages)
 	current := original
@@ -139,18 +143,24 @@ func recoverCandidate(ctx context.Context, ai AIExtractor, original RawCandidate
 		})
 		logicalRequests += requests
 		addAICallCountsToCounts(&calls, requestCalls)
+		event := newRecoveryEvent(current, "image", issues)
 		if err != nil {
-			return NormalizedCandidate{}, recoveryFailure(current, "image", issues, err), calls, logicalRequests
+			event.Outcome = "failed"
+			return NormalizedCandidate{}, recoveryFailure(current, "image", issues, err), calls, logicalRequests, append(events, event)
 		}
 		candidate, failure := recoveredCandidate(current, response, "image", issues)
 		if failure != nil {
-			return NormalizedCandidate{}, failure, calls, logicalRequests
+			event.Outcome = "failed"
+			return NormalizedCandidate{}, failure, calls, logicalRequests, append(events, event)
 		}
 		current = candidate
 		evaluation := evaluateCandidate(current, pageIndex, nil)
 		if len(evaluation.issues) == 0 {
-			return evaluation.normalized, nil, calls, logicalRequests
+			event.Outcome = "succeeded"
+			return evaluation.normalized, nil, calls, logicalRequests, append(events, event)
 		}
+		event.Outcome = "unresolved"
+		events = append(events, event)
 		issues = evaluation.issues
 		selectedImages = recoveryPages(current.SourcePages, pageIndex)
 		selectedOCR = ocrForPages(ocr, selectedImages)
@@ -166,22 +176,36 @@ func recoverCandidate(ctx context.Context, ai AIExtractor, original RawCandidate
 		})
 		logicalRequests += requests
 		addAICallCountsToCounts(&calls, requestCalls)
+		event := newRecoveryEvent(current, "reconciliation", issues)
 		if err != nil {
-			return NormalizedCandidate{}, recoveryFailure(current, "reconciliation", issues, err), calls, logicalRequests
+			event.Outcome = "failed"
+			return NormalizedCandidate{}, recoveryFailure(current, "reconciliation", issues, err), calls, logicalRequests, append(events, event)
 		}
 		candidate, failure := recoveredCandidate(current, response, "reconciliation", issues)
 		if failure != nil {
-			return NormalizedCandidate{}, failure, calls, logicalRequests
+			event.Outcome = "failed"
+			return NormalizedCandidate{}, failure, calls, logicalRequests, append(events, event)
 		}
 		current = candidate
 		evaluation := evaluateCandidate(current, pageIndex, nil)
 		if len(evaluation.issues) == 0 {
-			return evaluation.normalized, nil, calls, logicalRequests
+			event.Outcome = "succeeded"
+			return evaluation.normalized, nil, calls, logicalRequests, append(events, event)
 		}
-		return NormalizedCandidate{}, &ExtractionFailure{Candidate: current, Issues: evaluation.issues, Stage: "reconciliation"}, calls, logicalRequests
+		event.Outcome = "unresolved"
+		return NormalizedCandidate{}, &ExtractionFailure{Candidate: current, Issues: evaluation.issues, Stage: "reconciliation"}, calls, logicalRequests, append(events, event)
 	}
 
-	return NormalizedCandidate{}, &ExtractionFailure{Candidate: current, Issues: issues, Stage: "validation"}, calls, logicalRequests
+	return NormalizedCandidate{}, &ExtractionFailure{Candidate: current, Issues: issues, Stage: "validation"}, calls, logicalRequests, events
+}
+
+func newRecoveryEvent(candidate RawCandidate, stage string, issues []ValidationIssue) RecoveryEvent {
+	return RecoveryEvent{
+		CandidateName: candidate.Name,
+		SourcePages:   append([]int(nil), candidate.SourcePages...),
+		Stage:         stage,
+		TriggerIssues: append([]ValidationIssue(nil), issues...),
+	}
 }
 
 func recoveredCandidate(original RawCandidate, response []RawCandidate, stage string, issues []ValidationIssue) (RawCandidate, *ExtractionFailure) {

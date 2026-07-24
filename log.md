@@ -296,3 +296,9 @@ or Blocked.
 - Completed: the prompt now requires `review_kind=none` if and only if `review_reasons` is empty. A model response that nevertheless supplies a reason with `none` is deterministically reclassified as `source_ambiguity`, avoiding an accidental image-recovery request while preserving manual-review routing.
 - RED/GREEN evidence: `TestNormalizeClassifiesReasonWithNoneKindAsSourceAmbiguity` failed when the raw response retained `none`, then passed after the normalization guard.
 - Full verification: `go vet ./...` and `go test ./... -count=1` passed on macOS with local PostgreSQL available.
+
+### 2026-07-24 — Recovery event reporting
+
+- Completed: each targeted image-recovery or reconciliation request now appends a compact `recovery_events` entry to the run report. An event records the candidate name and source pages, triggering validation issues, stage (`image` or `reconciliation`), and outcome (`succeeded`, `unresolved`, or `failed`); it does not persist page images or OCR text.
+- RED/GREEN evidence: `TestReportIncludesSuccessfulImageRecoveryEvent` initially found no `recovery_events` field, then passed after the recovery pipeline propagated its event data into `RunReport`.
+- Full verification: `go vet ./...` and `go test ./... -count=1` passed on macOS with local PostgreSQL available.
