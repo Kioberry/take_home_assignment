@@ -223,3 +223,9 @@ or Blocked.
 - Extraction result: 39 rendered pages, 94 normalized candidates, 25 review candidates, zero extraction failures, ten text calls, eleven targeted image-recovery calls, and no request retries.
 - Gate result: **failed / not eligible for persistence.** The completeness gate expected exactly 80 accounted records and reported `unexpected_accounted_candidate_count`: 94 candidates. The run correctly exited nonzero even though normalization itself had no failures.
 - Evidence: `tmp/extraction/20260724T031911.919212000Z/report.json` and `review.json`. Four cross-page records cannot yet be claimed as a complete gate pass; the duplicate/overlap accounting defect must be diagnosed and fixed before a new paid full run or database replay.
+
+### 2026-07-24 — Full-run count discrepancy root cause
+
+- Diagnosis: the 94 reported candidates contain 14 duplicate overlap extractions, not 14 additional PDF items. Every duplicate is on a configured batch-boundary page (5, 9, 17, 25, 33, or 37); twelve duplicate pairs have identical names and two differ only by casing (`DANTHAG'S RAZOR`/`Danthag's Razor` and `DARKSTAR MACE`/`Darkstar Mace`).
+- Evidence: case-insensitive grouping of `normalized.json` yields exactly 80 unique source names, matching the visual PDF audit. The count gate is failing because `CandidateKey` includes a raw-description hash, so independently generated descriptions for the same item in overlapping batches do not match and are retained as distinct candidates.
+- Follow-up: replace the current generic review-only stdout output with an anomaly summary that groups duplicate candidates by normalized name and source pages, separately lists missing required spans and extraction failures, and points to their evidence. Do not rerun the paid full extraction until the merge identity and anomaly reporting are fixed and verified.
