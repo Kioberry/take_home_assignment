@@ -85,7 +85,7 @@ go test ./... -count=1
 | --- | --- | --- |
 | Static checks and full local Go suite | Passed on macOS | `go vet ./...`, `go test ./... -count=1`, and `git diff --check`; see [engineering log](log.md) |
 | OpenAI Responses API request contract | Passed locally | Mocked `cmd/extract` provider tests |
-| Bounded pages 7-9 live smoke | Not verified / blocked | Requires an active billed OpenAI API account and the configured model |
+| Bounded pages 7-9 live smoke | Passed | Run `20260724T030712.308626000Z`: four normalized records, zero failures, no database writes; see `log.md` |
 | Full 39-page/80-record dry-run | Not run | Requires successful bounded smoke |
 | Fresh-database persistence replay | Not run | Requires successful full dry-run |
 

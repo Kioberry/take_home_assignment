@@ -202,3 +202,10 @@ or Blocked.
 - RED evidence: the new prompt-contract tests failed because the original prompt omitted the closed vocabulary and recovery-target instructions.
 - GREEN evidence: `go test ./cmd/extract -run 'Test(ExtractionSystemPromptDefinesClosedOntologyVocabulary|RequestTextMakesRecoveryTargetAndCardinalityExplicit|OpenAIExtractor)' -count=1` passed.
 - Full verification: `go vet ./...`, `go test ./... -count=1`, and `git diff --check` passed on macOS with local PostgreSQL available.
+
+### 2026-07-24 — OpenAI bounded smoke test passed, pages 7-9
+
+- Command: `go run ./cmd/extract --dry-run --pages 7-9` with explicit authorization to send those pages' OCR content to OpenAI.
+- Run ID: `20260724T030712.308626000Z`.
+- Result: **Passed.** The dry run completed one OpenAI text call, produced four candidates and four normalized records, with zero failures and zero database writes. No image recovery or reconciliation call was needed.
+- Evidence: Armor of Retribution and Eagle Eye Helm were accepted. Exo-Armor correctly spans pages 7-9 and was retained with `needs_review=true` for OCR/source ambiguities. Helmofillomen was retained with `needs_review=true` for name/spelling uncertainty. Both review decisions preserve source evidence instead of fabricating missing facts.
