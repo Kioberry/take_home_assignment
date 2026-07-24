@@ -249,3 +249,9 @@ or Blocked.
 - Completed: every run also prints its `report.json` path, so the terminal points to the durable machine-readable evidence.
 - RED evidence: `TestFormatRunSummaryPrioritizesAnomaliesOverOrdinaryReview` initially failed because the formatter did not exist.
 - GREEN evidence: focused run-summary and previous review-summary tests passed after wiring the new formatter into `run`.
+
+### 2026-07-24 — Offline overlap-fix verification
+
+- Full verification: `go vet ./...`, `go test ./... -count=1`, and `git diff --check` passed on macOS with local PostgreSQL available. The sandbox-only run was unable to bind `httptest` or access `localhost:5433`; the host run supplied the valid result.
+- Saved-artifact evidence: `tmp/extraction/20260724T031911.919212000Z/normalized.json` contains 94 candidates, 80 case-insensitive normalized-name groups, and 14 duplicate groups. This confirms the recorded source inventory count and the overlap-duplicate diagnosis without making another API call.
+- Scope limit: the old artifacts are immutable evidence and do not retroactively rerun the corrected merge code. The next full API dry run remains required to produce a fresh 80-candidate pipeline report before any database persistence.
