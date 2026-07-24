@@ -229,3 +229,9 @@ or Blocked.
 - Diagnosis: the 94 reported candidates contain 14 duplicate overlap extractions, not 14 additional PDF items. Every duplicate is on a configured batch-boundary page (5, 9, 17, 25, 33, or 37); twelve duplicate pairs have identical names and two differ only by casing (`DANTHAG'S RAZOR`/`Danthag's Razor` and `DARKSTAR MACE`/`Darkstar Mace`).
 - Evidence: case-insensitive grouping of `normalized.json` yields exactly 80 unique source names, matching the visual PDF audit. The count gate is failing because `CandidateKey` includes a raw-description hash, so independently generated descriptions for the same item in overlapping batches do not match and are retained as distinct candidates.
 - Follow-up: replace the current generic review-only stdout output with an anomaly summary that groups duplicate candidates by normalized name and source pages, separately lists missing required spans and extraction failures, and points to their evidence. Do not rerun the paid full extraction until the merge identity and anomaly reporting are fixed and verified.
+
+### 2026-07-24 — Overlap-deduplication design
+
+- Decision: no prompt change is needed for the 94-versus-80 discrepancy. The model's differing but source-grounded descriptions across overlapping batches are expected; the local merge identity must tolerate them.
+- Design: merge candidates with the same normalized name when their source pages overlap or touch, retain non-touching same-named records separately, and preserve scalar disagreements as reviewable merge conflicts. Replace verbose review stdout with an anomaly-first summary plus artifact paths.
+- Scope: implementation and verification use the existing local run artifacts and unit tests; no new API call, database write, or database reset is authorized.
