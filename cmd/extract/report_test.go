@@ -1,0 +1,190 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestReportIncludesSuccessfulImageRecoveryEvent(t *testing.T) {
+	invalid := pipelineCandidate("Blurred", 1)
+	invalid.RarityRaw = "mythic"
+	fixed := pipelineCandidate("Blurred", 1)
+	ai := &scriptedAI{t: t, responses: [][]RawCandidate{{invalid}, {fixed}}}
+	result := RunExtraction(context.Background(), ai, pipelinePages(1, 1), pipelineOCR(1, 1), Config{
+		SelectedPages:      []int{1},
+		BatchSize:          5,
+		Overlap:            1,
+		MaxSemanticRetries: 1,
+	})
+
+	encoded, err := json.Marshal(newRunReport(testConfig(t), pipelinePages(1, 1), result))
+	if err != nil {
+		t.Fatalf("marshal report: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("decode report: %v", err)
+	}
+	events, found := payload["recovery_events"].([]any)
+	if !found || len(events) != 1 {
+		t.Fatalf("recovery events = %#v, want one image recovery event", payload["recovery_events"])
+	}
+	event, ok := events[0].(map[string]any)
+	if !ok {
+		t.Fatalf("event = %#v, want object", events[0])
+	}
+	if event["candidate_name"] != "Blurred" || event["stage"] != "image" || event["outcome"] != "succeeded" {
+		t.Fatalf("event = %#v, want successful image recovery for Blurred", event)
+	}
+	issues, found := event["trigger_issues"].([]any)
+	if !found || len(issues) == 0 {
+		t.Fatalf("trigger issues = %#v, want recovery reason", event["trigger_issues"])
+	}
+}
+
+func TestReportWritesPreDBArtifactsAndResumeSafeAccounting(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.APIKey = "artifact-secret"
+	result := testExtractionResult(t, "Artifact Item")
+	store, err := NewArtifactStore(cfg.RunRoot, cfg.RunID)
+	if err != nil {
+		t.Fatalf("NewArtifactStore: %v", err)
+	}
+	report := newRunReport(cfg, []Page{{Number: 1, ImagePath: "page-001.png"}}, result)
+
+	if err := writePreDBArtifacts(store, []OCRPage{{Number: 1, Text: "saved OCR"}}, result, &report); err != nil {
+		t.Fatalf("writePreDBArtifacts: %v", err)
+	}
+
+	for _, name := range []string{"ocr.json", "raw_candidates.json", "normalized.json", "review.json", "report.json"} {
+		path := filepath.Join(store.Root(), name)
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if strings.Contains(string(contents), cfg.APIKey) {
+			t.Fatalf("%s contains API key", name)
+		}
+	}
+
+	var raw []RawCandidate
+	if err := store.ReadJSON("raw_candidates.json", &raw); err != nil {
+		t.Fatalf("read raw candidates: %v", err)
+	}
+	if len(raw) != 1 || raw[0].Name != "Artifact Item" {
+		t.Fatalf("raw candidates = %#v, want Artifact Item", raw)
+	}
+	var persisted RunReport
+	if err := store.ReadJSON("report.json", &persisted); err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	if persisted.PageCount != 1 || persisted.CandidateCount != 1 || persisted.NormalizedCount != 1 || persisted.ReviewCount != 0 || persisted.FailureCount != 0 {
+		t.Fatalf("report accounting = %#v, want one clean candidate", persisted)
+	}
+	if persisted.TextCalls != 2 || persisted.ImageCalls != 1 || persisted.ReconciliationCalls != 1 || persisted.APICalls != 4 {
+		t.Fatalf("report call accounting = %#v, want all API counts", persisted)
+	}
+	if persisted.DatabaseResumeSupported {
+		t.Fatal("report claims unsupported database resume is available")
+	}
+}
+
+func TestReportStatesDatabaseResumeIsUnsupported(t *testing.T) {
+	report := newRunReport(testConfig(t), nil, ExtractionResult{})
+	if report.DatabaseResumeSupported {
+		t.Fatal("database resume support = true, want false")
+	}
+	if !strings.Contains(strings.ToLower(report.DatabaseResumeNote), "fresh") || !strings.Contains(strings.ToLower(report.DatabaseResumeNote), "database") {
+		t.Fatalf("database resume note = %q, want fresh-database limitation", report.DatabaseResumeNote)
+	}
+}
+
+func TestReportWritesNonNegativeRetryCountFromActualAttempts(t *testing.T) {
+	cfg := testConfig(t)
+	store, err := NewArtifactStore(cfg.RunRoot, cfg.RunID)
+	if err != nil {
+		t.Fatalf("NewArtifactStore: %v", err)
+	}
+
+	result := ExtractionResult{APICalls: 4, LogicalRequests: 3}
+	report := newRunReport(cfg, nil, result)
+	if report.RetryCount != 1 {
+		t.Fatalf("retry count = %d, want one retry", report.RetryCount)
+	}
+	if err := writePreDBArtifacts(store, nil, result, &report); err != nil {
+		t.Fatalf("writePreDBArtifacts: %v", err)
+	}
+	var persisted RunReport
+	if err := store.ReadJSON("report.json", &persisted); err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	if persisted.RetryCount != 1 || persisted.LogicalRequests != 3 {
+		t.Fatalf("persisted retry accounting = %#v, want one retry from three logical requests", persisted)
+	}
+
+	clamped := newRunReport(cfg, nil, ExtractionResult{APICalls: 1, LogicalRequests: 3})
+	if clamped.RetryCount != 0 {
+		t.Fatalf("retry count = %d, want non-negative zero", clamped.RetryCount)
+	}
+}
+
+func TestFormatReviewSummaryListsCandidatesReasonsAndArtifact(t *testing.T) {
+	summary := formatReviewSummary("tmp/extraction/run-123/review.json", []NormalizedCandidate{{
+		Raw: RawCandidate{Name: "Exo-Armor", SourcePages: []int{7, 8, 9}},
+		ReviewReasons: []string{
+			"OCR stat bonus is unclear",
+			"source lore needs confirmation",
+		},
+	}})
+
+	for _, want := range []string{
+		"Review required: 1 candidate(s)",
+		"Exo-Armor (pages 7,8,9)",
+		"OCR stat bonus is unclear; source lore needs confirmation",
+		"Review details: tmp/extraction/run-123/review.json",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary = %q, want %q", summary, want)
+		}
+	}
+}
+
+func TestFormatReviewSummaryOmitsOutputWithoutCandidates(t *testing.T) {
+	if summary := formatReviewSummary("tmp/extraction/run-123/review.json", nil); summary != "" {
+		t.Fatalf("summary = %q, want empty", summary)
+	}
+}
+
+func TestFormatRunSummaryPrioritizesAnomaliesOverOrdinaryReview(t *testing.T) {
+	report := RunReport{CompletenessIssues: []ValidationIssue{{
+		Code:    "unexpected_accounted_candidate_count",
+		Message: "full run accounted for 94 candidates, want 80",
+	}}}
+	result := ExtractionResult{Review: []NormalizedCandidate{{
+		Raw:           RawCandidate{Name: "OCR-only review"},
+		ReviewReasons: []string{"minor OCR uncertainty"},
+	}}}
+
+	summary := formatRunSummary(report, result, "tmp/run/review.json", "tmp/run/report.json")
+	for _, want := range []string{
+		"Extraction anomalies:",
+		"unexpected_accounted_candidate_count: full run accounted for 94 candidates, want 80",
+		"Manual review: 1 candidate(s)",
+		"Review details: tmp/run/review.json",
+		"Run report: tmp/run/report.json",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary = %q, want %q", summary, want)
+		}
+	}
+	if strings.Contains(summary, "OCR-only review") || strings.Contains(summary, "minor OCR uncertainty") {
+		t.Fatalf("summary includes ordinary review detail: %q", summary)
+	}
+	if strings.Index(summary, "Extraction anomalies:") > strings.Index(summary, "Manual review:") {
+		t.Fatalf("summary does not prioritize anomalies: %q", summary)
+	}
+}

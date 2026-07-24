@@ -159,3 +159,25 @@ PDF pages
 
 > AI interprets the source; deterministic code controls data quality and
 > escalation.
+
+## 3. Verified catalog run
+
+The full quality gate is intentionally narrow: it requires all 39 PDF pages,
+exactly 80 accounted candidates, and the four required cross-page records.
+Candidates with source ambiguity may still persist with `needs_review=true`;
+only structural failures or a completeness mismatch block the database write.
+That keeps the normal path fast while preserving an explicit human-review
+queue instead of silently guessing.
+
+The final successful dry run (`20260724T-debug-dryrun`) rendered all 39 pages,
+normalized 80 candidates, retained five for review, and reported zero
+extraction failures. It used 10 text requests and two targeted image-recovery
+requests, with no retries. Its immutable artifacts were then replayed into a
+fresh dedicated Postgres database without making any further model request.
+The replay inserted 80 `magic_item` records, 219 `effect` records, and 155
+`limitation` records; five items retain `needs_review=true`.
+
+This demonstrates the intended operating model: use AI where semantic reading
+is needed, use deterministic code to make invalid states impossible, and make
+the small remainder visible to a human rather than holding the entire catalog
+hostage to perfect OCR.

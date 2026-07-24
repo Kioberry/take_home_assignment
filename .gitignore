@@ -7,5 +7,8 @@
 .env
 .env.local
 
+# Local extraction run artifacts
+tmp/extraction/
+
 # OS
 .DS_Store
