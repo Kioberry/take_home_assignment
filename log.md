@@ -276,3 +276,11 @@ or Blocked.
 - Completed: the extraction-only JSON contract now requires `review_kind`: `none`, `visual_ambiguity`, or `source_ambiguity`. This is not a database or ontology schema change.
 - Completed: prompt instructions constrain `visual_ambiguity` to OCR facts that an original page image can resolve, while incomplete/narrative/semantic source evidence is `source_ambiguity` and remains manual review.
 - GREEN evidence: OpenAI provider schema tests and the visual/source routing test passed locally with `httptest`; no external API request was made.
+
+### 2026-07-24 — Full OpenAI dry run with structured review routing
+
+- Local verification: `go vet ./...`, `go test ./... -count=1`, and `git diff --check` passed on macOS with local PostgreSQL available. The sandbox-only test run could not bind `httptest` or reach `localhost:5433`; the host run supplied the valid full-suite result.
+- Command: `go run ./cmd/extract --dry-run --run-id 20260724T-debug-dryrun` with the owner's authorization to submit the complete PDF to OpenAI. It did not connect to or write PostgreSQL.
+- Run ID: `20260724T-debug-dryrun`.
+- Result: **passed / eligible for later persistence after human review.** The run rendered 39 pages, produced and normalized exactly 80 candidates, had zero extraction failures, and made ten text plus two image-recovery requests with zero retries. The full report is `tmp/extraction/20260724T-debug-dryrun/report.json`.
+- Review routing evidence: five candidates require review. Two are model-classified `source_ambiguity` (`EXO-ARMOR`, `Amulet of Undead Control`); two are locally generated merge conflicts (`WAR PICK OF ARMOR PIERCING`, `UNIVERSAL SCROLL`) and correctly bypassed image recovery; `War Drum of the Horde` has a source-incompleteness reason but the model returned `review_kind=none`, so it remained in review through the existing reason-based guard. The latter is prompt-classification evidence to refine, not a run failure.
