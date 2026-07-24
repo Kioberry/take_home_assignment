@@ -296,7 +296,12 @@ func loadResumeArtifacts(store *ArtifactStore, cfg *Config) ([]Page, []OCRPage, 
 	if previous.FailureCount != len(previous.Failures) {
 		return nil, nil, ExtractionResult{}, fmt.Errorf("resume report failures count %d does not match report count %d", len(previous.Failures), previous.FailureCount)
 	}
+	normalized = restoreResumeReviewState(normalized, review)
 	if err := validateResumeCandidateGraph(raw, normalized, review, previous); err != nil {
+		return nil, nil, ExtractionResult{}, err
+	}
+	normalized, err := renormalizeResumeCandidates(raw, normalized)
+	if err != nil {
 		return nil, nil, ExtractionResult{}, err
 	}
 	result := ExtractionResult{
@@ -329,6 +334,50 @@ func loadResumeArtifacts(store *ArtifactStore, cfg *Config) ([]Page, []OCRPage, 
 		return nil, nil, ExtractionResult{}, fmt.Errorf("resume OCR has %d pages, report requires %d", len(pages), previous.PageCount)
 	}
 	return pages, ocr, result, nil
+}
+
+func restoreResumeReviewState(normalized []NormalizedCandidate, review ReviewArtifact) []NormalizedCandidate {
+	reviewByKey := make(map[string]NormalizedCandidate, len(review.Candidates))
+	for _, candidate := range review.Candidates {
+		reviewByKey[CandidateKey(candidate.Raw)] = candidate
+	}
+	for index, candidate := range normalized {
+		reviewCandidate, found := reviewByKey[CandidateKey(candidate.Raw)]
+		if !found {
+			continue
+		}
+		normalized[index].NeedsReview = true
+		normalized[index].ReviewReasons = unionStrings(candidate.ReviewReasons, reviewCandidate.ReviewReasons)
+		normalized[index].Raw.ReviewReasons = unionStrings(candidate.Raw.ReviewReasons, reviewCandidate.Raw.ReviewReasons)
+		if normalized[index].Raw.ReviewKind == ReviewKindNone {
+			normalized[index].Raw.ReviewKind = reviewCandidate.Raw.ReviewKind
+		}
+	}
+	return normalized
+}
+
+func renormalizeResumeCandidates(raw []RawCandidate, previous []NormalizedCandidate) ([]NormalizedCandidate, error) {
+	previousByKey := make(map[string]NormalizedCandidate, len(previous))
+	for _, candidate := range previous {
+		previousByKey[CandidateKey(candidate.Raw)] = candidate
+	}
+	normalized := make([]NormalizedCandidate, 0, len(raw))
+	for _, candidate := range raw {
+		current, issues := Normalize(candidate)
+		if len(issues) > 0 {
+			messages := make([]string, 0, len(issues))
+			for _, issue := range issues {
+				messages = append(messages, issue.Message)
+			}
+			return nil, fmt.Errorf("resume re-normalize candidate %q: %s", candidate.Name, strings.Join(messages, "; "))
+		}
+		if prior, found := previousByKey[CandidateKey(candidate)]; found {
+			current.NeedsReview = current.NeedsReview || prior.NeedsReview
+			current.ReviewReasons = unionStrings(current.ReviewReasons, prior.ReviewReasons)
+		}
+		normalized = append(normalized, current)
+	}
+	return normalized, nil
 }
 
 func validateResumeCandidateGraph(raw []RawCandidate, normalized []NormalizedCandidate, review ReviewArtifact, report RunReport) error {

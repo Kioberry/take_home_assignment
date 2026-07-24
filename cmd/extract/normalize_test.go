@@ -259,6 +259,29 @@ func TestNormalizeCanonicalEnumsAndExplicitAliases(t *testing.T) {
 	}
 }
 
+func TestNormalizeCanonicalizesDisplayName(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want string
+	}{
+		{raw: "  AMULET OF DAYLIGHT'S EMBRACE  ", want: "Amulet of Daylight's Embrace"},
+		{raw: "EXO-ARMOR", want: "Exo-Armor"},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			candidate := validRawCandidate()
+			candidate.Name = tc.raw
+
+			got, issues := Normalize(candidate)
+			if len(issues) != 0 {
+				t.Fatalf("issues = %#v, want none", issues)
+			}
+			if got.Raw.Name != tc.want {
+				t.Fatalf("name = %q, want %q", got.Raw.Name, tc.want)
+			}
+		})
+	}
+}
+
 func TestNormalizeEffectCategoriesAndPreservesDescriptionBytes(t *testing.T) {
 	tests := []struct {
 		raw  string

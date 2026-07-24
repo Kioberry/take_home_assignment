@@ -66,6 +66,7 @@ var effectCategoryAliases = map[string]generated.EffectCategory{
 }
 
 func Normalize(raw RawCandidate) (NormalizedCandidate, []ValidationIssue) {
+	raw.Name = normalizeDisplayName(raw.Name)
 	if raw.ReviewKind == ReviewKindNone && len(raw.ReviewReasons) > 0 {
 		raw.ReviewKind = ReviewKindSourceAmbiguity
 	}
@@ -124,6 +125,33 @@ func Normalize(raw RawCandidate) (NormalizedCandidate, []ValidationIssue) {
 	}
 
 	return normalized, issues
+}
+
+var lowercaseDisplayNameWords = map[string]bool{
+	"a": true, "an": true, "and": true, "as": true, "at": true, "but": true,
+	"by": true, "for": true, "from": true, "in": true, "into": true, "nor": true,
+	"of": true, "on": true, "or": true, "over": true, "per": true, "the": true,
+	"to": true, "via": true, "with": true,
+}
+
+func normalizeDisplayName(value string) string {
+	words := strings.Fields(value)
+	for index, word := range words {
+		lower := strings.ToLower(word)
+		if index > 0 && index < len(words)-1 && lowercaseDisplayNameWords[lower] {
+			words[index] = lower
+			continue
+		}
+		parts := strings.Split(lower, "-")
+		for partIndex, part := range parts {
+			if part == "" {
+				continue
+			}
+			parts[partIndex] = strings.ToUpper(part[:1]) + part[1:]
+		}
+		words[index] = strings.Join(parts, "-")
+	}
+	return strings.Join(words, " ")
 }
 
 func usageFromExplicitItemWording(raw RawCandidate) (normalizedUsage, bool) {
