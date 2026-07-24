@@ -41,6 +41,34 @@ func TestMergeCandidatesRemovesExactOverlapDuplicate(t *testing.T) {
 	}
 }
 
+func TestMergeCandidatesMergesSamePageAlternateDescriptions(t *testing.T) {
+	first := mergeCandidate("Arcane Compass", []int{5}, "Points north.", false)
+	second := mergeCandidate("arcane compass", []int{5}, "Wondrous item. Points north.", false)
+
+	merged, conflicts := MergeCandidates([][]RawCandidate{{first}, {second}})
+
+	if len(conflicts) != 0 {
+		t.Fatalf("conflicts = %#v, want none", conflicts)
+	}
+	if len(merged) != 1 {
+		t.Fatalf("merged %d candidates, want one", len(merged))
+	}
+	if got, want := merged[0].RawDescription, "Wondrous item. Points north."; got != want {
+		t.Fatalf("description = %q, want %q", got, want)
+	}
+}
+
+func TestMergeCandidatesMergesCaseOnlyNameVariantsOnTouchingPages(t *testing.T) {
+	first := mergeCandidate("DARKSTAR MACE", []int{13}, "A dark mace.", false)
+	second := mergeCandidate("Darkstar Mace", []int{13}, "Wondrous item. A dark mace.", false)
+
+	merged, _ := MergeCandidates([][]RawCandidate{{first}, {second}})
+
+	if len(merged) != 1 {
+		t.Fatalf("merged %d candidates, want one", len(merged))
+	}
+}
+
 func TestMergeCandidatesRetainsSameNameOnDifferentPages(t *testing.T) {
 	first := mergeCandidate("Mirror Ring", []int{4}, "Shows a reflection.", false)
 	second := mergeCandidate(" mirror   ring ", []int{12}, "Shows another reflection.", false)

@@ -235,3 +235,10 @@ or Blocked.
 - Decision: no prompt change is needed for the 94-versus-80 discrepancy. The model's differing but source-grounded descriptions across overlapping batches are expected; the local merge identity must tolerate them.
 - Design: merge candidates with the same normalized name when their source pages overlap or touch, retain non-touching same-named records separately, and preserve scalar disagreements as reviewable merge conflicts. Replace verbose review stdout with an anomaly-first summary plus artifact paths.
 - Scope: implementation and verification use the existing local run artifacts and unit tests; no new API call, database write, or database reset is authorized.
+
+### 2026-07-24 — Overlap-deduplication implementation
+
+- Completed: `MergeCandidates` now merges candidates with the same normalized name when their source pages touch, even when model wording differs or the name casing differs. Non-touching same-named entries remain separate.
+- Completed: description merging retains the more complete source text when one alternate response already contains the other, preventing duplicated sentence fragments.
+- RED evidence: same-page alternate-description and case-only-name tests initially produced two candidates.
+- GREEN evidence: the focused overlap, non-touching-name, cross-page, and scalar-conflict tests passed after the merge change.

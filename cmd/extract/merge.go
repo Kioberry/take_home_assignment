@@ -130,8 +130,7 @@ func canonicalCandidateOrderKey(candidate RawCandidate) string {
 
 func canMergeCandidates(group candidateMergeGroup, candidate RawCandidate) bool {
 	return normalizeIdentity(group.candidate.Name) == normalizeIdentity(candidate.Name) &&
-		pagesTouch(group.candidate.SourcePages, candidate.SourcePages) &&
-		(group.hasContinuation || candidate.Continuation)
+		pagesTouch(group.candidate.SourcePages, candidate.SourcePages)
 }
 
 func mergeCandidateInto(group *candidateMergeGroup, candidate RawCandidate, conflicts *[]ValidationIssue) {
@@ -200,6 +199,12 @@ func mergeDescription(first, second string) string {
 	}
 	if normalizeWhitespace(first) == normalizeWhitespace(second) {
 		return first
+	}
+	if strings.Contains(normalizeWhitespace(first), normalizeWhitespace(second)) {
+		return first
+	}
+	if strings.Contains(normalizeWhitespace(second), normalizeWhitespace(first)) {
+		return second
 	}
 
 	firstWords := strings.Fields(first)
