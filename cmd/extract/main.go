@@ -170,8 +170,9 @@ func run(ctx context.Context, cfg Config, deps Dependencies) error {
 		filepath.Join(store.Root(), "review.json"),
 		filepath.Join(store.Root(), "report.json"),
 	))
-	if cfg.DryRun {
-		return runResultError(report)
+	qualityErr := runResultError(report)
+	if cfg.DryRun || qualityErr != nil {
+		return qualityErr
 	}
 
 	pool, err := deps.Connect(ctx)

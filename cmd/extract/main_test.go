@@ -389,7 +389,7 @@ func TestRunPersistsReviewCandidatesAfterTheEmptyCatalogGuard(t *testing.T) {
 	}
 }
 
-func TestRunReportsExtractionFailureOnceAfterDatabasePhase(t *testing.T) {
+func TestRunReportsExtractionFailureWithoutDatabasePhase(t *testing.T) {
 	cfg := testConfig(t)
 	accepted := testExtractionResult(t, "Persisted Item").Accepted[0]
 	failed := validRawCandidate()
@@ -403,10 +403,23 @@ func TestRunReportsExtractionFailureOnceAfterDatabasePhase(t *testing.T) {
 		}},
 	}
 	deps := testDependencies(t, result)
-	deps.Connect = func(context.Context) (*pgxpool.Pool, error) { return nil, nil }
-	deps.ApplySchema = func(context.Context, *pgxpool.Pool) error { return nil }
-	deps.EnsureEmptyCatalog = func(context.Context, *pgxpool.Pool) error { return nil }
-	deps.Persist = func(context.Context, *pgxpool.Pool, NormalizedCandidate) error { return nil }
+	databaseCalls := 0
+	deps.Connect = func(context.Context) (*pgxpool.Pool, error) {
+		databaseCalls++
+		return nil, errors.New("database must not connect after extraction failure")
+	}
+	deps.ApplySchema = func(context.Context, *pgxpool.Pool) error {
+		databaseCalls++
+		return errors.New("schema must not apply after extraction failure")
+	}
+	deps.EnsureEmptyCatalog = func(context.Context, *pgxpool.Pool) error {
+		databaseCalls++
+		return errors.New("database guard must not run after extraction failure")
+	}
+	deps.Persist = func(context.Context, *pgxpool.Pool, NormalizedCandidate) error {
+		databaseCalls++
+		return errors.New("persistence must not run after extraction failure")
+	}
 
 	if err := run(context.Background(), cfg, deps); err == nil {
 		t.Fatal("run succeeded despite a failed candidate")
@@ -419,8 +432,11 @@ func TestRunReportsExtractionFailureOnceAfterDatabasePhase(t *testing.T) {
 	if err := store.ReadJSON("report.json", &report); err != nil {
 		t.Fatalf("read report: %v", err)
 	}
-	if report.FailureCount != 1 || len(report.Failures) != 1 || report.InsertedCount != 1 {
-		t.Fatalf("report = %#v, want one extraction failure and one persisted item", report)
+	if databaseCalls != 0 {
+		t.Fatalf("database calls = %d, want none after extraction failure", databaseCalls)
+	}
+	if report.FailureCount != 1 || len(report.Failures) != 1 || report.InsertedCount != 0 {
+		t.Fatalf("report = %#v, want one extraction failure and no persisted items", report)
 	}
 }
 
@@ -654,6 +670,46 @@ func TestRunReturnsNonzeroForCandidateAndCompletenessFailures(t *testing.T) {
 	err := run(context.Background(), cfg, testDependencies(t, result))
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "failure") {
 		t.Fatalf("run error = %v, want nonzero candidate/completeness failure", err)
+	}
+}
+
+func TestRunBlocksDatabaseBeforePersistenceWhenQualityGateFails(t *testing.T) {
+	cfg := testConfig(t)
+	failed := validRawCandidate()
+	failed.Name = "Unresolved"
+	result := ExtractionResult{
+		Failed: []ExtractionFailure{{
+			Candidate: failed,
+			Issues:    []ValidationIssue{{Code: "missing_core", Message: "missing source content"}},
+			Stage:     "validation",
+		}},
+		CompletenessIssues: []ValidationIssue{{Code: "unexpected_accounted_candidate_count", Message: "incomplete full run"}},
+	}
+	deps := testDependencies(t, result)
+	databaseCalls := 0
+	deps.Connect = func(context.Context) (*pgxpool.Pool, error) {
+		databaseCalls++
+		return nil, errors.New("quality-gated run must not connect")
+	}
+	deps.ApplySchema = func(context.Context, *pgxpool.Pool) error {
+		databaseCalls++
+		return errors.New("quality-gated run must not apply schema")
+	}
+	deps.EnsureEmptyCatalog = func(context.Context, *pgxpool.Pool) error {
+		databaseCalls++
+		return errors.New("quality-gated run must not guard database")
+	}
+	deps.Persist = func(context.Context, *pgxpool.Pool, NormalizedCandidate) error {
+		databaseCalls++
+		return errors.New("quality-gated run must not persist")
+	}
+
+	err := run(context.Background(), cfg, deps)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "failure") {
+		t.Fatalf("run error = %v, want quality-gate failure", err)
+	}
+	if databaseCalls != 0 {
+		t.Fatalf("database calls = %d, want none before quality gate passes", databaseCalls)
 	}
 }
 

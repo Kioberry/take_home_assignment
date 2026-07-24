@@ -324,3 +324,10 @@ or Blocked.
 
 - Command: `go run ./cmd/extract --dry-run --pages 7-9 --run-id 20260724T-exo-visual-routing` with the owner's authorization to send pages 7–9 to OpenAI. It completed with four normalized candidates, zero review candidates, zero failures, one text call, and two image-recovery calls.
 - Result: the generalized prompt correctly classified `Exo-Armor` as visual ambiguity and the report records an `image` event with `succeeded` outcome. The recovered record has `review_kind=none`, no review reasons, and preserves the source fact that both Strength and Dexterity ability scores increase by 4. The separate Helm of Ill Omen image recovery also succeeded.
+
+### 2026-07-24 — Formal-run quality gate
+
+- Root cause: the former control flow checked extraction failures and completeness issues only for `--dry-run`. A formal run could create its pre-database artifacts and then connect to PostgreSQL before reporting a failed quality result.
+- Completed: immediately after writing the pre-database artifacts and stdout summary, `run` now evaluates `runResultError(report)`. Any extraction failure or completeness issue returns before database connection, schema application, empty-catalog validation, or persistence. A clean formal run continues to persist both accepted records and review records with `needs_review=true`.
+- Verification: `TestRunBlocksDatabaseBeforePersistenceWhenQualityGateFails` and `TestRunReportsExtractionFailureWithoutDatabasePhase` passed; `go test ./cmd/extract -count=1`, `gofmt -d cmd/extract/main.go cmd/extract/main_test.go`, and `git diff --check` passed.
+- Scope: this was local control-flow verification only. No external API call, full dry run, PostgreSQL connection, or database write was made.
