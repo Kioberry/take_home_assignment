@@ -66,6 +66,9 @@ var effectCategoryAliases = map[string]generated.EffectCategory{
 }
 
 func Normalize(raw RawCandidate) (NormalizedCandidate, []ValidationIssue) {
+	if raw.ReviewKind == ReviewKindNone && len(raw.ReviewReasons) > 0 {
+		raw.ReviewKind = ReviewKindSourceAmbiguity
+	}
 	normalized := NormalizedCandidate{
 		Raw:           raw,
 		ReviewReasons: append([]string(nil), raw.ReviewReasons...),

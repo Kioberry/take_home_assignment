@@ -386,6 +386,23 @@ func TestNormalizeNeedsReviewForLowConfidenceOrReasons(t *testing.T) {
 	}
 }
 
+func TestNormalizeClassifiesReasonWithNoneKindAsSourceAmbiguity(t *testing.T) {
+	candidate := validRawCandidate()
+	candidate.ReviewKind = ReviewKindNone
+	candidate.ReviewReasons = []string{"The supplied source ends before the item's mechanical properties."}
+
+	got, issues := Normalize(candidate)
+	if len(issues) != 0 {
+		t.Fatalf("issues = %#v, want none", issues)
+	}
+	if got.Raw.ReviewKind != ReviewKindSourceAmbiguity {
+		t.Fatalf("review kind = %q, want %q", got.Raw.ReviewKind, ReviewKindSourceAmbiguity)
+	}
+	if !got.NeedsReview {
+		t.Fatal("needs review = false, want true")
+	}
+}
+
 func validRawCandidate() RawCandidate {
 	effectIndex := 0
 	return RawCandidate{

@@ -290,3 +290,9 @@ or Blocked.
 - Completed: visually audited the five review candidates against the rendered source pages; no API call or database write was made.
 - Resolutions: `EXO-ARMOR` is `Armor (plate), artifact (requires attunement)`, gains +4 Strength and +4 Dexterity, and has the good-alignment attunement restriction; `WAR PICK OF ARMOR PIERCING` is a held weapon; `Amulet of Undead Control` is complete and its eight-hour reuse sentence ends with “after its use”; `War Drum of the Horde` has its complete mechanical effects on pages 30–31; `UNIVERSAL SCROLL` requires attunement by a bard, cleric, druid, sorcerer, warlock, or wizard.
 - Diagnosis: all five review entries are recoverable from the original PDF. Four are merge/OCR disagreements and the War Drum review reason is a model-classification error. No source detail needs to be invented or accepted as permanently ambiguous.
+
+### 2026-07-24 — Review-kind consistency guard
+
+- Completed: the prompt now requires `review_kind=none` if and only if `review_reasons` is empty. A model response that nevertheless supplies a reason with `none` is deterministically reclassified as `source_ambiguity`, avoiding an accidental image-recovery request while preserving manual-review routing.
+- RED/GREEN evidence: `TestNormalizeClassifiesReasonWithNoneKindAsSourceAmbiguity` failed when the raw response retained `none`, then passed after the normalization guard.
+- Full verification: `go vet ./...` and `go test ./... -count=1` passed on macOS with local PostgreSQL available.
