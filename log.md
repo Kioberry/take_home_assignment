@@ -302,3 +302,9 @@ or Blocked.
 - Completed: each targeted image-recovery or reconciliation request now appends a compact `recovery_events` entry to the run report. An event records the candidate name and source pages, triggering validation issues, stage (`image` or `reconciliation`), and outcome (`succeeded`, `unresolved`, or `failed`); it does not persist page images or OCR text.
 - RED/GREEN evidence: `TestReportIncludesSuccessfulImageRecoveryEvent` initially found no `recovery_events` field, then passed after the recovery pipeline propagated its event data into `RunReport`.
 - Full verification: `go vet ./...` and `go test ./... -count=1` passed on macOS with local PostgreSQL available.
+
+### 2026-07-24 — Targeted live review-routing verification
+
+- Command: `go run ./cmd/extract --dry-run --pages 7-9 --run-id 20260724T-exo-reviewkind` with the owner's authorization to send pages 7–9 to OpenAI. It completed with four normalized candidates, one review, zero failures, one text call, and one image-recovery call. Its report records `HELMOFILLOMEN` with an `image` recovery event, `visual_ambiguity` trigger, and `succeeded` outcome.
+- Exo result: `EXO-ARMOR` is correctly normalized as `artifact` and no longer has the invalid `review_kind=none` plus reasons combination. However, the model still labels the readable +4 ability-score increase as `source_ambiguity`; visual audit shows that page 8 contains the value. This is an unresolved prompt-routing false positive, not an artifact or recovery-event failure.
+- Command: `go run ./cmd/extract --dry-run --pages 29-31 --run-id 20260724T-wardrum-reviewkind` with the owner's authorization to send pages 29–31 to OpenAI. It completed with one normalized candidate, zero review candidates, zero failures, one text call, and no recovery calls. `War Drum of the Horde` now has complete mechanics, `review_kind=none`, and no review reasons.
