@@ -30,7 +30,7 @@ PDF -> render/OCR -> Claude structured extraction -> merge/deduplicate
     -> artifacts and terminal report
 ```
 
-The provider uses Anthropic Messages API tool-use structured output. Claude
+The default provider uses OpenAI Responses API strict JSON Schema output. OpenAI
 text and image recovery models are configured locally through ignored `.env`
 variables; shell variables take precedence. The default path uses bounded
 transport retries, does not fabricate missing ontology values, records review
@@ -84,14 +84,14 @@ go test ./... -count=1
 | Gate | Latest actual status | Evidence |
 | --- | --- | --- |
 | Static checks and full local Go suite | Passed on macOS | `go vet ./...`, `go test ./... -count=1`, and `git diff --check`; see [engineering log](log.md) |
-| Claude Messages API request contract | Passed locally | Mocked `cmd/extract` provider tests |
-| Bounded pages 7-9 live smoke | Not verified / blocked | Configured model returned model-not-found; do not retry until paid access and an available model are confirmed |
+| OpenAI Responses API request contract | Passed locally | Mocked `cmd/extract` provider tests |
+| Bounded pages 7-9 live smoke | Not verified / blocked | Requires an active billed OpenAI API account and the configured model |
 | Full 39-page/80-record dry-run | Not run | Requires successful bounded smoke |
 | Fresh-database persistence replay | Not run | Requires successful full dry-run |
 
 ## Known limits
 
-- A usable paid API key and an account-available Claude model are required for
+- A usable paid OpenAI API key and an account-available model are required for
   real extraction; no successful live run is currently claimed.
 - `tmp/extraction/` artifacts are local and ignored by Git.
 - The pipeline intentionally rejects a nonempty catalog because it has no

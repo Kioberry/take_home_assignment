@@ -160,3 +160,9 @@ or Blocked.
 - Local verification: focused Claude-provider and `.env` tests, `go vet ./...`, `go test ./... -count=1`, and `git diff --check` passed on macOS with local PostgreSQL available.
 - Live verification: **Not verified / blocked.** Pages 7–9 dry-run attempts returned a model-not-found response for the configured model. The owner reported that usable paid API access for both providers is not currently available; do not make further provider calls until credentials, billing, and an available model are confirmed.
 - Evidence limit: no successful paid extraction, image-recovery request, full 39-page/80-record dry-run, or fresh-database persistence run has been performed. Local `tmp/extraction/` artifacts are non-authoritative failed-attempt evidence and are not committed.
+
+### 2026-07-24 — Default provider restored to OpenAI
+
+- Decision: restore the default extraction provider to OpenAI Responses API after the owner configured a local `OPENAI_API_KEY` and selected `gpt-5.6-luna` for routine OCR batches plus `gpt-5.6-terra` for targeted image recovery.
+- Reasoning: the OpenAI provider already has strict structured-output, retry, image-input, and regression coverage. The prior Claude path returned a model-not-found response and remains historical, not the active runtime route.
+- Verification status: configuration and local provider tests are rerun after this change. No live OpenAI extraction is claimed until the bounded pages 7-9 dry-run completes with the owner's explicit document-sharing authorization.

@@ -40,17 +40,17 @@ Additional local prerequisite:
 - Poppler (`pdftoppm`) for page rendering — `brew install poppler`
 - Tesseract for OCR — `brew install tesseract`
 
-Configure Anthropic in the local `.env` file (already ignored by Git):
+Configure OpenAI in the local `.env` file (already ignored by Git):
 
 ```dotenv
-ANTHROPIC_API_KEY="..."
-ANTHROPIC_TEXT_MODEL="claude-sonnet-4-20250514"    # optional routine extraction model
-ANTHROPIC_VISION_MODEL="claude-sonnet-4-20250514"  # optional image-recovery model
+OPENAI_API_KEY="..."
+OPENAI_TEXT_MODEL="gpt-5.6-luna"    # optional routine extraction model
+OPENAI_VISION_MODEL="gpt-5.6-terra" # optional image-recovery model
 ```
 
 Shell environment variables take precedence over `.env`. The extractor uses
-Anthropic's Messages API and tool-use structured output; do not put the API key
-in source files, JSON artifacts, or commits.
+OpenAI's Responses API and strict JSON Schema structured output; do not put the
+API key in source files, JSON artifacts, or commits.
 
 Run modes:
 
