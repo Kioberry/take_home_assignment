@@ -68,6 +68,19 @@ func RunExtraction(ctx context.Context, ai AIExtractor, pages []Page, ocr []OCRP
 				for _, issue := range candidateMergeIssues {
 					evaluation.normalized.ReviewReasons = append(evaluation.normalized.ReviewReasons, issue.Message)
 				}
+				addCandidateToBucket(&result, evaluation.normalized)
+				continue
+			}
+			if candidate.ReviewKind == ReviewKindVisualAmbiguity {
+				final, failure, calls, requests := recoverCandidate(ctx, ai, candidate, []ValidationIssue{pipelineIssue("visual_ambiguity", "source image review requested", true)}, pageIndex, ocr, resolvedConfig)
+				result.LogicalRequests += requests
+				addAICallCounts(&result, calls)
+				if failure != nil {
+					result.Failed = append(result.Failed, *failure)
+				} else {
+					addCandidateToBucket(&result, final)
+				}
+				continue
 			}
 			addCandidateToBucket(&result, evaluation.normalized)
 			continue

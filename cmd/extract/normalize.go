@@ -69,7 +69,7 @@ func Normalize(raw RawCandidate) (NormalizedCandidate, []ValidationIssue) {
 	normalized := NormalizedCandidate{
 		Raw:           raw,
 		ReviewReasons: append([]string(nil), raw.ReviewReasons...),
-		NeedsReview:   raw.Confidence < 0.85 || len(raw.ReviewReasons) > 0,
+		NeedsReview:   raw.Confidence < 0.85 || len(raw.ReviewReasons) > 0 || raw.ReviewKind == ReviewKindSourceAmbiguity,
 		Effects:       make([]NormalizedEffect, len(raw.Effects)),
 	}
 	issues := make([]ValidationIssue, 0)

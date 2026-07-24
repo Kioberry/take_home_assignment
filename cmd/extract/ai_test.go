@@ -425,7 +425,7 @@ func assertResponsesRequest(t *testing.T, r *http.Request, wantModel string, wan
 	assertRequiredFields(t, candidate, []string{
 		"name", "source_pages", "source_item_type_raw", "source_item_subtype_raw", "rarity_raw",
 		"usage_mode_raw", "wear_slot_raw", "requires_attunement", "attunement_requirement",
-		"raw_description", "effects", "limitations", "confidence", "review_reasons", "continuation",
+		"raw_description", "effects", "limitations", "confidence", "review_reasons", "review_kind", "continuation",
 	})
 	assertNullable(t, candidate["properties"].(map[string]any)["source_item_subtype_raw"].(map[string]any), "string")
 	assertNullable(t, candidate["properties"].(map[string]any)["wear_slot_raw"].(map[string]any), "string")
@@ -557,6 +557,7 @@ func candidateJSON(t *testing.T) map[string]any {
 		}},
 		"confidence":     0.92,
 		"review_reasons": []any{},
+		"review_kind":    "none",
 		"continuation":   false,
 	}
 }

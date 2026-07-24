@@ -60,6 +60,14 @@ type RawLimitation struct {
 	Description string `json:"description"`
 }
 
+type ReviewKind string
+
+const (
+	ReviewKindNone            ReviewKind = "none"
+	ReviewKindVisualAmbiguity ReviewKind = "visual_ambiguity"
+	ReviewKindSourceAmbiguity ReviewKind = "source_ambiguity"
+)
+
 type RawCandidate struct {
 	Name                  string          `json:"name"`
 	SourcePages           []int           `json:"source_pages"`
@@ -75,6 +83,7 @@ type RawCandidate struct {
 	Limitations           []RawLimitation `json:"limitations"`
 	Confidence            float64         `json:"confidence"`
 	ReviewReasons         []string        `json:"review_reasons"`
+	ReviewKind            ReviewKind      `json:"review_kind"`
 	Continuation          bool            `json:"continuation"`
 }
 

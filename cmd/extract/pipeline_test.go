@@ -154,6 +154,30 @@ func TestRunExtractionRoutesMergeConflictToReviewWithoutImageRecovery(t *testing
 	}
 }
 
+func TestRunExtractionUsesImageRecoveryOnlyForVisualAmbiguity(t *testing.T) {
+	visual := pipelineCandidate("Unreadable Title", 1)
+	visual.ReviewKind = "visual_ambiguity"
+	resolved := pipelineCandidate("Readable Title", 1)
+	source := pipelineCandidate("Narrative Entry", 1)
+	source.ReviewKind = "source_ambiguity"
+	source.ReviewReasons = []string{"The supplied source is narrative-only."}
+	ai := &scriptedAI{t: t, responses: [][]RawCandidate{{visual, source}, {resolved}}}
+
+	result := RunExtraction(context.Background(), ai, pipelinePages(1, 1), pipelineOCR(1, 1), Config{
+		SelectedPages:      []int{1},
+		BatchSize:          5,
+		Overlap:            1,
+		MaxSemanticRetries: 1,
+	})
+
+	if len(ai.requests) != 2 || ai.requests[1].Mode != "recover" {
+		t.Fatalf("requests = %#v, want text extraction then visual recovery", ai.requests)
+	}
+	if len(result.Accepted) != 1 || len(result.Review) != 1 || len(result.Failed) != 0 {
+		t.Fatalf("buckets = accepted:%d review:%d failed:%d, want 1/1/0", len(result.Accepted), len(result.Review), len(result.Failed))
+	}
+}
+
 func TestRunExtractionReconcilesOnceThenFailsWithoutFourthAPICall(t *testing.T) {
 	textInvalid := pipelineCandidate("Unclear", 2)
 	textInvalid.RarityRaw = "mythic"

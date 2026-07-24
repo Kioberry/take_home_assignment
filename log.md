@@ -270,3 +270,9 @@ or Blocked.
 - Completed: candidates whose only issues are local `merge_conflict` records now bypass image recovery and enter manual review with the conflict messages preserved as review reasons.
 - RED evidence: the focused routing test observed two AI calls because a merge conflict triggered image recovery.
 - GREEN evidence: the same test now observes only the original text extraction and one review candidate; the existing invalid-candidate image-recovery test also remains green.
+
+### 2026-07-24 — Structured review routing contract
+
+- Completed: the extraction-only JSON contract now requires `review_kind`: `none`, `visual_ambiguity`, or `source_ambiguity`. This is not a database or ontology schema change.
+- Completed: prompt instructions constrain `visual_ambiguity` to OCR facts that an original page image can resolve, while incomplete/narrative/semantic source evidence is `source_ambiguity` and remains manual review.
+- GREEN evidence: OpenAI provider schema tests and the visual/source routing test passed locally with `httptest`; no external API request was made.
