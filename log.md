@@ -209,3 +209,9 @@ or Blocked.
 - Run ID: `20260724T030712.308626000Z`.
 - Result: **Passed.** The dry run completed one OpenAI text call, produced four candidates and four normalized records, with zero failures and zero database writes. No image recovery or reconciliation call was needed.
 - Evidence: Armor of Retribution and Eagle Eye Helm were accepted. Exo-Armor correctly spans pages 7-9 and was retained with `needs_review=true` for OCR/source ambiguities. Helmofillomen was retained with `needs_review=true` for name/spelling uncertainty. Both review decisions preserve source evidence instead of fabricating missing facts.
+
+### 2026-07-24 — CLI review summary
+
+- Completed: successful extraction runs now print a concise stdout review summary whenever candidates require human review. Each line includes the candidate name, source pages, review reasons, and the durable `review.json` path, so a headless run can be triaged without opening artifacts manually.
+- RED evidence: `TestFormatReviewSummary*` initially failed because no formatter existed.
+- GREEN evidence: the focused formatter test passed, followed by `go vet ./...`, `go test ./... -count=1`, and `git diff --check` on macOS with local PostgreSQL available.

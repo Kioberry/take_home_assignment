@@ -92,3 +92,30 @@ func TestReportWritesNonNegativeRetryCountFromActualAttempts(t *testing.T) {
 		t.Fatalf("retry count = %d, want non-negative zero", clamped.RetryCount)
 	}
 }
+
+func TestFormatReviewSummaryListsCandidatesReasonsAndArtifact(t *testing.T) {
+	summary := formatReviewSummary("tmp/extraction/run-123/review.json", []NormalizedCandidate{{
+		Raw: RawCandidate{Name: "Exo-Armor", SourcePages: []int{7, 8, 9}},
+		ReviewReasons: []string{
+			"OCR stat bonus is unclear",
+			"source lore needs confirmation",
+		},
+	}})
+
+	for _, want := range []string{
+		"Review required: 1 candidate(s)",
+		"Exo-Armor (pages 7,8,9)",
+		"OCR stat bonus is unclear; source lore needs confirmation",
+		"Review details: tmp/extraction/run-123/review.json",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary = %q, want %q", summary, want)
+		}
+	}
+}
+
+func TestFormatReviewSummaryOmitsOutputWithoutCandidates(t *testing.T) {
+	if summary := formatReviewSummary("tmp/extraction/run-123/review.json", nil); summary != "" {
+		t.Fatalf("summary = %q, want empty", summary)
+	}
+}

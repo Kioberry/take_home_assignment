@@ -87,6 +87,29 @@ func retryCount(apiCalls, logicalRequests int) int {
 	return apiCalls - logicalRequests
 }
 
+// formatReviewSummary prints the durable review artifact location alongside the
+// specific candidates that require a human decision. It is intentionally
+// concise so a non-GUI CLI run can be triaged from stdout.
+func formatReviewSummary(reviewPath string, candidates []NormalizedCandidate) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+
+	var summary strings.Builder
+	fmt.Fprintf(&summary, "Review required: %d candidate(s)\n", len(candidates))
+	for _, candidate := range candidates {
+		fmt.Fprintf(
+			&summary,
+			"- %s (pages %s): %s\n",
+			candidate.Raw.Name,
+			pageNumbersFromInts(candidate.Raw.SourcePages),
+			strings.Join(candidate.ReviewReasons, "; "),
+		)
+	}
+	fmt.Fprintf(&summary, "Review details: %s\n", reviewPath)
+	return summary.String()
+}
+
 // redactExtractionResult ensures configuration secrets cannot cross an
 // extraction, retry, or reporting boundary into durable artifacts.
 func redactExtractionResult(result ExtractionResult, secret string) ExtractionResult {
