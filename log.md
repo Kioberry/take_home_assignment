@@ -284,3 +284,9 @@ or Blocked.
 - Run ID: `20260724T-debug-dryrun`.
 - Result: **passed / eligible for later persistence after human review.** The run rendered 39 pages, produced and normalized exactly 80 candidates, had zero extraction failures, and made ten text plus two image-recovery requests with zero retries. The full report is `tmp/extraction/20260724T-debug-dryrun/report.json`.
 - Review routing evidence: five candidates require review. Two are model-classified `source_ambiguity` (`EXO-ARMOR`, `Amulet of Undead Control`); two are locally generated merge conflicts (`WAR PICK OF ARMOR PIERCING`, `UNIVERSAL SCROLL`) and correctly bypassed image recovery; `War Drum of the Horde` has a source-incompleteness reason but the model returned `review_kind=none`, so it remained in review through the existing reason-based guard. The latter is prompt-classification evidence to refine, not a run failure.
+
+### 2026-07-24 — Manual review evidence audit
+
+- Completed: visually audited the five review candidates against the rendered source pages; no API call or database write was made.
+- Resolutions: `EXO-ARMOR` is `Armor (plate), artifact (requires attunement)`, gains +4 Strength and +4 Dexterity, and has the good-alignment attunement restriction; `WAR PICK OF ARMOR PIERCING` is a held weapon; `Amulet of Undead Control` is complete and its eight-hour reuse sentence ends with “after its use”; `War Drum of the Horde` has its complete mechanical effects on pages 30–31; `UNIVERSAL SCROLL` requires attunement by a bard, cleric, druid, sorcerer, warlock, or wizard.
+- Diagnosis: all five review entries are recoverable from the original PDF. Four are merge/OCR disagreements and the War Drum review reason is a model-classification error. No source detail needs to be invented or accepted as permanently ambiguous.
