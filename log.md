@@ -242,3 +242,10 @@ or Blocked.
 - Completed: description merging retains the more complete source text when one alternate response already contains the other, preventing duplicated sentence fragments.
 - RED evidence: same-page alternate-description and case-only-name tests initially produced two candidates.
 - GREEN evidence: the focused overlap, non-touching-name, cross-page, and scalar-conflict tests passed after the merge change.
+
+### 2026-07-24 — Anomaly-first CLI summary
+
+- Completed: CLI output now puts completeness issues and extraction failures under `Extraction anomalies` before any human-review information. Ordinary OCR/source review candidates are summarized only as a count with a `review.json` path; their per-item reasons no longer flood stdout.
+- Completed: every run also prints its `report.json` path, so the terminal points to the durable machine-readable evidence.
+- RED evidence: `TestFormatRunSummaryPrioritizesAnomaliesOverOrdinaryReview` initially failed because the formatter did not exist.
+- GREEN evidence: focused run-summary and previous review-summary tests passed after wiring the new formatter into `run`.

@@ -164,9 +164,12 @@ func run(ctx context.Context, cfg Config, deps Dependencies) error {
 	if err := writePreDBArtifacts(store, ocr, result, &report); err != nil {
 		return safeError(fmt.Errorf("write pre-database artifacts: %w", err), cfg.APIKey)
 	}
-	if summary := formatReviewSummary(filepath.Join(store.Root(), "review.json"), result.Review); summary != "" {
-		fmt.Fprint(os.Stdout, summary)
-	}
+	fmt.Fprint(os.Stdout, formatRunSummary(
+		report,
+		result,
+		filepath.Join(store.Root(), "review.json"),
+		filepath.Join(store.Root(), "report.json"),
+	))
 	if cfg.DryRun {
 		return runResultError(report)
 	}

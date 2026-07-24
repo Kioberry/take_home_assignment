@@ -110,6 +110,28 @@ func formatReviewSummary(reviewPath string, candidates []NormalizedCandidate) st
 	return summary.String()
 }
 
+// formatRunSummary keeps blocking extraction anomalies separate from ordinary
+// source-review work so a headless CLI run immediately explains why it cannot
+// proceed to persistence.
+func formatRunSummary(report RunReport, result ExtractionResult, reviewPath, reportPath string) string {
+	var summary strings.Builder
+	if len(report.CompletenessIssues) > 0 || len(report.Failures) > 0 {
+		summary.WriteString("Extraction anomalies:\n")
+		for _, issue := range report.CompletenessIssues {
+			fmt.Fprintf(&summary, "- %s: %s\n", issue.Code, issue.Message)
+		}
+		for _, failure := range report.Failures {
+			fmt.Fprintf(&summary, "- %s (%s): %s\n", failure.CandidateName, failure.Stage, failure.Error)
+		}
+	}
+	if len(result.Review) > 0 {
+		fmt.Fprintf(&summary, "Manual review: %d candidate(s)\n", len(result.Review))
+		fmt.Fprintf(&summary, "Review details: %s\n", reviewPath)
+	}
+	fmt.Fprintf(&summary, "Run report: %s\n", reportPath)
+	return summary.String()
+}
+
 // redactExtractionResult ensures configuration secrets cannot cross an
 // extraction, retry, or reporting boundary into durable artifacts.
 func redactExtractionResult(result ExtractionResult, secret string) ExtractionResult {

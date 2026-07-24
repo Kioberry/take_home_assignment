@@ -119,3 +119,33 @@ func TestFormatReviewSummaryOmitsOutputWithoutCandidates(t *testing.T) {
 		t.Fatalf("summary = %q, want empty", summary)
 	}
 }
+
+func TestFormatRunSummaryPrioritizesAnomaliesOverOrdinaryReview(t *testing.T) {
+	report := RunReport{CompletenessIssues: []ValidationIssue{{
+		Code:    "unexpected_accounted_candidate_count",
+		Message: "full run accounted for 94 candidates, want 80",
+	}}}
+	result := ExtractionResult{Review: []NormalizedCandidate{{
+		Raw:           RawCandidate{Name: "OCR-only review"},
+		ReviewReasons: []string{"minor OCR uncertainty"},
+	}}}
+
+	summary := formatRunSummary(report, result, "tmp/run/review.json", "tmp/run/report.json")
+	for _, want := range []string{
+		"Extraction anomalies:",
+		"unexpected_accounted_candidate_count: full run accounted for 94 candidates, want 80",
+		"Manual review: 1 candidate(s)",
+		"Review details: tmp/run/review.json",
+		"Run report: tmp/run/report.json",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary = %q, want %q", summary, want)
+		}
+	}
+	if strings.Contains(summary, "OCR-only review") || strings.Contains(summary, "minor OCR uncertainty") {
+		t.Fatalf("summary includes ordinary review detail: %q", summary)
+	}
+	if strings.Index(summary, "Extraction anomalies:") > strings.Index(summary, "Manual review:") {
+		t.Fatalf("summary does not prioritize anomalies: %q", summary)
+	}
+}
