@@ -319,3 +319,8 @@ or Blocked.
 - Completed: replaced the narrow title/number vocabulary with a source-of-uncertainty rule. The prompt now routes any OCR or page-layout artifact — including truncated or misrecognized words, symbols, values, qualifiers, conditions, or other fields — to `visual_ambiguity` when the original page can resolve it. `source_ambiguity` is reserved for uncertainty that remains after direct page inspection.
 - RED/GREEN evidence: `TestExtractionSystemPromptDefinesClosedOntologyVocabulary` first failed because the prompt lacked the OCR/page-layout criterion, then passed after the prompt update.
 - Full verification: `go vet ./...` and `go test ./... -count=1` passed on macOS with local PostgreSQL available. No API call was made after this prompt-only change.
+
+### 2026-07-24 — Exo visual-recovery verification
+
+- Command: `go run ./cmd/extract --dry-run --pages 7-9 --run-id 20260724T-exo-visual-routing` with the owner's authorization to send pages 7–9 to OpenAI. It completed with four normalized candidates, zero review candidates, zero failures, one text call, and two image-recovery calls.
+- Result: the generalized prompt correctly classified `Exo-Armor` as visual ambiguity and the report records an `image` event with `succeeded` outcome. The recovered record has `review_kind=none`, no review reasons, and preserves the source fact that both Strength and Dexterity ability scores increase by 4. The separate Helm of Ill Omen image recovery also succeeded.
