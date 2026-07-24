@@ -215,3 +215,11 @@ or Blocked.
 - Completed: successful extraction runs now print a concise stdout review summary whenever candidates require human review. Each line includes the candidate name, source pages, review reasons, and the durable `review.json` path, so a headless run can be triaged without opening artifacts manually.
 - RED evidence: `TestFormatReviewSummary*` initially failed because no formatter existed.
 - GREEN evidence: the focused formatter test passed, followed by `go vet ./...`, `go test ./... -count=1`, and `git diff --check` on macOS with local PostgreSQL available.
+
+### 2026-07-24 — Full OpenAI dry run
+
+- Command: `go run ./cmd/extract --dry-run` with the owner's authorization to send the full PDF OCR content to OpenAI. It did not connect to or write PostgreSQL.
+- Run ID: `20260724T031911.919212000Z`.
+- Extraction result: 39 rendered pages, 94 normalized candidates, 25 review candidates, zero extraction failures, ten text calls, eleven targeted image-recovery calls, and no request retries.
+- Gate result: **failed / not eligible for persistence.** The completeness gate expected exactly 80 accounted records and reported `unexpected_accounted_candidate_count`: 94 candidates. The run correctly exited nonzero even though normalization itself had no failures.
+- Evidence: `tmp/extraction/20260724T031911.919212000Z/report.json` and `review.json`. Four cross-page records cannot yet be claimed as a complete gate pass; the duplicate/overlap accounting defect must be diagnosed and fixed before a new paid full run or database replay.

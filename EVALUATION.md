@@ -25,7 +25,7 @@ audit table.
 The pipeline is:
 
 ```text
-PDF -> render/OCR -> Claude structured extraction -> merge/deduplicate
+PDF -> render/OCR -> OpenAI structured extraction -> merge/deduplicate
     -> normalize/validate -> targeted image recovery -> sqlc transaction
     -> artifacts and terminal report
 ```
@@ -55,7 +55,7 @@ go test ./... -count=1
 git diff --check
 ```
 
-With a billed Anthropic API key and an account-available model configured in
+With a billed OpenAI API key and an account-available model configured in
 `.env`, run the bounded smoke test:
 
 ```bash
@@ -86,7 +86,7 @@ go test ./... -count=1
 | Static checks and full local Go suite | Passed on macOS | `go vet ./...`, `go test ./... -count=1`, and `git diff --check`; see [engineering log](log.md) |
 | OpenAI Responses API request contract | Passed locally | Mocked `cmd/extract` provider tests |
 | Bounded pages 7-9 live smoke | Passed | Run `20260724T030712.308626000Z`: four normalized records, zero failures, no database writes; see `log.md` |
-| Full 39-page/80-record dry-run | Not run | Requires successful bounded smoke |
+| Full 39-page/80-record dry-run | Failed completeness gate | Run `20260724T031911.919212000Z`: 39 pages, 94 normalized candidates, 25 review candidates, zero extraction failures, but expected exactly 80 accounted records |
 | Fresh-database persistence replay | Not run | Requires successful full dry-run |
 
 ## Known limits
