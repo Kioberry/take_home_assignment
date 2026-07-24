@@ -255,3 +255,12 @@ or Blocked.
 - Full verification: `go vet ./...`, `go test ./... -count=1`, and `git diff --check` passed on macOS with local PostgreSQL available. The sandbox-only run was unable to bind `httptest` or access `localhost:5433`; the host run supplied the valid result.
 - Saved-artifact evidence: `tmp/extraction/20260724T031911.919212000Z/normalized.json` contains 94 candidates, 80 case-insensitive normalized-name groups, and 14 duplicate groups. This confirms the recorded source inventory count and the overlap-duplicate diagnosis without making another API call.
 - Scope limit: the old artifacts are immutable evidence and do not retroactively rerun the corrected merge code. The next full API dry run remains required to produce a fresh 80-candidate pipeline report before any database persistence.
+
+### 2026-07-24 — Full OpenAI dry run after overlap fix
+
+- Command: `go run ./cmd/extract --dry-run` with the owner's authorization to submit the full PDF OCR content to OpenAI. It did not connect to or write PostgreSQL.
+- Run ID: `20260724T055029.102717000Z`.
+- Result: **failed / not eligible for persistence.** The run rendered 39 pages and accounted for 82 candidates: 80 normalized, 11 marked for manual review, and two failures. It made ten text requests and six image-recovery requests, with no request retries.
+- Remaining duplicate source identities: page 5 contains `QUATERMASTER'S CHEST` and `Quartermaster's Chest`; page 9 contains `Helm of Ill Omen` and `Helmofillomen`. They are alternate OCR/title renderings of two source entries, but do not share the same normalized name and so were not merged.
+- Recovery failure evidence: `Exo-Armor` and `AXE OF ENEMY ATTUNEMENT` had recoverable `merge_conflict` issues, then each image-recovery request hit the 90-second Responses API timeout. Merge conflicts should become review evidence without requiring image recovery.
+- CLI evidence: the anomaly-first summary correctly surfaced the count gate and the two failed candidates ahead of the 11-item review count. It did not include failure issue messages because `RunFailure.Error` is empty for extraction failures; the next formatter change must render `RunFailure.Issues` when no terminal error string exists.
