@@ -313,3 +313,9 @@ or Blocked.
 
 - Root cause: visual inspection of PDF page 8 shows “increases to both your Strength and Dexterity ability scores by 4”, but the corresponding local Tesseract artifact ends at “scores by” and omits the `4`. The first extraction request receives OCR text only, so the model cannot extract the missing number from its initial input.
 - Routing defect: the model correctly recognized that its supplied text lacked the value, but incorrectly emitted `source_ambiguity`. The missing value is an OCR-local, visually recoverable numeric gap, so it should be `visual_ambiguity` and trigger one targeted image-recovery request. No source ambiguity or database issue is involved.
+
+### 2026-07-24 — Generalized visual-routing prompt
+
+- Completed: replaced the narrow title/number vocabulary with a source-of-uncertainty rule. The prompt now routes any OCR or page-layout artifact — including truncated or misrecognized words, symbols, values, qualifiers, conditions, or other fields — to `visual_ambiguity` when the original page can resolve it. `source_ambiguity` is reserved for uncertainty that remains after direct page inspection.
+- RED/GREEN evidence: `TestExtractionSystemPromptDefinesClosedOntologyVocabulary` first failed because the prompt lacked the OCR/page-layout criterion, then passed after the prompt update.
+- Full verification: `go vet ./...` and `go test ./... -count=1` passed on macOS with local PostgreSQL available. No API call was made after this prompt-only change.

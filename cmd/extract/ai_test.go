@@ -42,6 +42,7 @@ func TestExtractionSystemPromptDefinesClosedOntologyVocabulary(t *testing.T) {
 		"wear_slot_raw: null or exactly one of head, neck, torso, outerwear, hands, feet, finger",
 		"category_raw: exactly one of offensive, defensive, utility",
 		"never put cooldowns, actions, durations, charges, or ability descriptions in usage_mode_raw",
+		"uncertainty is introduced by OCR or page layout",
 		"Mode recover or reconcile: return exactly one candidate",
 	} {
 		if !strings.Contains(strings.ToLower(extractionSystemPrompt), strings.ToLower(required)) {
